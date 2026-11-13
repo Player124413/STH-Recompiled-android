@@ -1,0 +1,144 @@
+# Builds the Android APK.
+#
+# Two shapes of build:
+#   * shell  - no game code: tools/android/make_stub_game.py writes a stand-in for the recompiler's output. The APK
+#              builds, installs and stops at "game not found". This is what proves the toolchain, the SDK runtime, the
+#              renderer, ImGui and the Java side all build, before a disc image is involved.
+#   * full   - with the player's own disc image: it is downloaded from the URL given to the run (or the repository
+#              variable SHADOW_ISO_URL), default.xbe is read out of it, the SDK's recompiler (built here on Linux)
+#              turns it into generated/game, and the APK is built from that.
+#
+# The disc image and the recompiled code it produces are never committed, cached or kept: the image goes away with the
+# runner and the APK artifact is kept for a few days. Only the player's own game is ever built.
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      iso_url:
+        description: "direct link to your own USA disc image (.iso); empty builds a shell APK"
+        required: false
+        default: ""
+  push:
+    paths:
+      - "android/**"
+      - "native/**"
+      - "src/**"
+      - "sdk/**"
+      - "config/game.toml"
+      - "tools/android/**"
+      - ".github/workflows/android.yml"
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    name: ${{ (inputs.iso_url || vars.SHADOW_ISO_URL) && 'APK (with the game)' || 'APK (shell, no game)' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      NDK_VERSION: 28.2.13676358
+      CMAKE_VERSION: 3.31.6
+      ISO_URL: ${{ inputs.iso_url || vars.SHADOW_ISO_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: SDK packages, NDK and CMake
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+            "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" > /dev/null
+          echo "NDK at $ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+
+      - name: Cache Gradle and SDL3
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            android/third_party/SDL
+          key: android-${{ runner.os }}-${{ hashFiles('android/app/build.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: android-${{ runner.os }}-
+
+      # ---- the game, when the run has one
+
+      - name: Where the game comes from
+        run: |
+          if [ -n "${ISO_URL}" ]; then
+            echo "a disc image will be used (the link is not printed: it is the player's own copy)"
+          else
+            echo "no disc image: this build is a shell APK (it installs and starts, and stops at 'game not found')"
+            echo "to build a playable one: run this workflow with iso_url set, or set the repository variable SHADOW_ISO_URL"
+          fi
+
+      - name: Read default.xbe out of the disc image
+        if: env.ISO_URL != ''
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 --retry-delay 5 -o /tmp/game.iso "${ISO_URL}"
+          ls -l /tmp/game.iso
+          python3 -I tools/host/xiso.py extract /tmp/game.iso /tmp/xiso default.xbe
+          test -s /tmp/xiso/default.xbe
+          mkdir -p assets
+          cp /tmp/xiso/default.xbe assets/default.xbe
+          ls -l assets/default.xbe
+          rm -f /tmp/game.iso
+
+      - name: Recompile the game
+        if: env.ISO_URL != ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+          cmake -S tools/android/xbe_recomp -B out/tools -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build out/tools --target xbe_recomp -j "$(nproc)"
+          ./out/tools/xbe_recomp config/game.toml --xdk sdk/xdk
+          ls generated/game | head
+          test -f generated/game/x86_func_mapping.cpp
+
+      - name: Stand-in for the game's code (shell build)
+        if: env.ISO_URL == ''
+        run: |
+          set -euo pipefail
+          python3 tools/android/make_stub_game.py
+          ls generated/game
+
+      # ---- the APK
+
+      - name: Build the APK
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: What was built
+        run: |
+          set -euo pipefail
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+          ls -l "$APK"
+          echo "### APK: $(basename "$APK"), $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${ISO_URL}" ]; then
+            echo "built with the game: playable" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "shell build: no game code in it, it stops at 'game not found'" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-android-${{ env.ISO_URL != '' && 'game' || 'shell' }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
