@@ -337,8 +337,13 @@ const char* const kPresetNames[] = {"MODERN", "COMPACT", "SPLIT"};
 
 std::filesystem::path File() { return app::ExeDir() / "touch.toml"; }
 
+// Bumped when the controls change shape: a layout saved by an older build would put the new buttons where the old ones
+// were, so its positions are dropped and the preset's are used instead (the size, opacity and preset choice stay).
+constexpr int64_t kLayoutVersion = 2;
+
 void Save() {
     toml::table t;
+    t.insert("version", kLayoutVersion);
     t.insert("preset", kPresetIds[uint32_t(g_preset)]);
     t.insert("opacity", int64_t(g_opacity));
     t.insert("scale", int64_t(g_scale));
@@ -368,7 +373,12 @@ void Load() {
         g_scale = std::clamp<uint32_t>(t["scale"].value_or(g_scale), 60u, 160u);
         g_floating = t["floating"].value_or(g_floating);
         g_custom = t["custom"].value_or(false);
-        if (auto* controls = t["controls"].as_table()) {
+        int64_t version = t["version"].value_or(0);
+        if (version < kLayoutVersion) {
+            LOGI("touch: touch.toml is from an older layout (%lld), using the %s preset", (long long)version,
+                 kPresetNames[uint32_t(g_preset)]);
+            g_custom = false;
+        } else if (auto* controls = t["controls"].as_table()) {
             for (const Info& info : kInfo) {
                 auto* arr = (*controls)[info.id].as_array();
                 if (!arr || arr->size() != 3) continue;
