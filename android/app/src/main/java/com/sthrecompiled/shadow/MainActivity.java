@@ -1,0 +1,307 @@
+package com.sthrecompiled.shadow;
+
+import android.Manifest;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.storage.StorageManager;
+import android.os.storage.StorageVolume;
+import android.provider.Settings;
+import android.view.InputDevice;
+import android.view.InputEvent;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+
+import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLControllerManager;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+// SDL's activity running libmain.so. The game goes in the Shadow folder on the phone's storage
+// (/storage/emulated/0/Shadow) or at the top of an SD card, as its own files (default.xbe and the rest) or as a disc
+// image (.iso). Reading it needs all files access, a special access Android grants on a settings page of its own,
+// never among the app's ordinary permissions. This asks for it and says where the game goes, each time the app comes
+// back without them; the game itself waits and starts as soon as it finds the files.
+public class MainActivity extends SDLActivity {
+    static final String SHARED = "Shadow";
+
+    private AlertDialog dialog;   // the one up, at most one at a time
+    private boolean notNow;       // the player turned the access down this run
+    private boolean imported;     // a copy this run finished: the game looks for it by itself
+    private final GameImporter importer = new GameImporter(this);
+
+    @Override
+    protected String[] getLibraries() {
+        return new String[] {"SDL3", "main"};
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        File own = getExternalFilesDir(null);
+        if (own != null) new File(own, "assets").mkdirs();
+        hideSystemBars();
+    }
+
+    // A controller some phones' game services pass on as a virtual device (MIUI's took a DualShock 4 on a Redmi Note
+    // 8 Pro): SDL sees no controller in it and drops its input. Its buttons and sticks go to the game as port 0's
+    // through here (native/input.cpp); a controller SDL has goes its own way as before.
+    private static boolean loose(InputEvent e, int sources) {
+        return !mBrokenLibraries && (e.getSource() & sources) != 0
+                && !SDLControllerManager.isDeviceSDLJoystick(e.getDeviceId());
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        boolean pad = KeyEvent.isGamepadButton(e.getKeyCode()) || (e.getKeyCode() >= KeyEvent.KEYCODE_DPAD_UP
+                && e.getKeyCode() <= KeyEvent.KEYCODE_DPAD_RIGHT);
+        if (pad && loose(e, InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK)) {
+            if (e.getRepeatCount() == 0) NativeBridge.looseKey(e.getKeyCode(), e.getAction() == KeyEvent.ACTION_DOWN);
+            return true;
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent e) {
+        if (loose(e, InputDevice.SOURCE_JOYSTICK) && e.getActionMasked() == MotionEvent.ACTION_MOVE) {
+            // the right stick on Z and RZ, the triggers on LTRIGGER and RTRIGGER or BRAKE and GAS, as Android has them
+            NativeBridge.looseAxes(e.getAxisValue(MotionEvent.AXIS_X), e.getAxisValue(MotionEvent.AXIS_Y),
+                    e.getAxisValue(MotionEvent.AXIS_Z), e.getAxisValue(MotionEvent.AXIS_RZ),
+                    Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE)),
+                    Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS)),
+                    e.getAxisValue(MotionEvent.AXIS_HAT_X), e.getAxisValue(MotionEvent.AXIS_HAT_Y));
+            return true;
+        }
+        return super.dispatchGenericMotionEvent(e);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        askForGame();
+    }
+
+    // SDL's older immersive flags don't always come back after a dialog (MIUI on Android 11 kept the status bar):
+    // the bars are hidden again each time the game has the focus, a swipe shows them for a moment
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
+        else if (!mBrokenLibraries) NativeBridge.looseRelease();  // its ups go elsewhere while the game is not in front
+    }
+
+    @SuppressWarnings("deprecation")
+    private void hideSystemBars() {
+        if (Build.VERSION.SDK_INT < 30) {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            return;
+        }
+        WindowInsetsController c = getWindow().getInsetsController();
+        if (c == null) return;
+        c.hide(WindowInsets.Type.systemBars());
+        c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+    }
+
+    // EXIT TO LAUNCHER in the port menu, from the game's thread: the activity goes away and the phone's launcher is
+    // in front again. The game process ends with it (native/main.cpp sees the window go).
+    public void finishGame() {
+        runOnUiThread(() -> {
+            setResult(RESULT_OK);
+            finishAndRemoveTask();
+        });
+    }
+
+    // a short buzz for the touch controls' presses, from the game's thread
+    public void tapHaptic(int ms) {
+        Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+        if (v == null || !v.hasVibrator()) return;
+        try {
+            v.vibrate(VibrationEffect.createOneShot(Math.max(1, ms), VibrationEffect.DEFAULT_AMPLITUDE));
+        } catch (Exception e) {
+            // a phone without control of its vibration motor: nothing to do
+        }
+    }
+
+    // ---- where the game goes
+
+    // Android 11 on has all files access, a page of its own in the settings; Android 10 the storage permission, with
+    // the legacy storage the manifest asks for
+    private static final boolean ALL_FILES_ACCESS = Build.VERSION.SDK_INT >= 30;
+    private static final int STORAGE_REQUEST = 0x426C;
+    private boolean storageAsked;  // the permission was asked for this run
+
+    private boolean hasStorageAccess() {
+        if (ALL_FILES_ACCESS) return Environment.isExternalStorageManager();
+        return checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    // the game's files, as native/game_files.cpp looks for them: default.xbe beside the folder's assets, or any .iso
+    private static boolean hasGame(File dir) {
+        if (dir == null || !dir.isDirectory()) return false;
+        File[] files = dir.listFiles();
+        if (files == null) return false;
+        for (File f : files) {
+            String n = f.getName().toLowerCase();
+            if (f.isFile() && (n.equals("default.xbe") || n.endsWith(".iso"))) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasGameAnywhere(File dir) {
+        return hasGame(dir) || hasGame(new File(dir, "assets"));
+    }
+
+    private void askForGame() {
+        if (imported || (dialog != null && dialog.isShowing())) return;
+        File own = getExternalFilesDir(null);
+        if (own != null && hasGameAnywhere(new File(own, "assets"))) return;
+        if (!hasStorageAccess()) {
+            if (!notNow) askAllFilesAccess();
+            return;
+        }
+        File shared = new File(Environment.getExternalStorageDirectory(), SHARED);
+        shared.mkdirs();
+        if (hasGameAnywhere(shared)) return;
+        for (File card : cardFolders())
+            if (hasGameAnywhere(card)) return;
+        tellWhereTheGameGoes();
+    }
+
+    // the Shadow folder on each SD card or USB stick mounted, as native/game_files.cpp looks in them
+    private List<File> cardFolders() {
+        List<File> out = new ArrayList<>();
+        if (!ALL_FILES_ACCESS) {
+            // Android 10: each card's root above the app's own folder on it, <root>/Android/data/<package>/files
+            File[] own = getExternalFilesDirs(null);
+            for (int i = 1; i < own.length; i++) {
+                File root = own[i];
+                for (int up = 0; root != null && up < 4; up++) root = root.getParentFile();
+                if (root != null) out.add(new File(root, SHARED));
+            }
+            return out;
+        }
+        StorageManager sm = getSystemService(StorageManager.class);
+        if (sm == null) return out;
+        for (StorageVolume v : sm.getStorageVolumes()) {
+            File root = v.getDirectory();
+            if (v.isPrimary() || root == null || !Environment.MEDIA_MOUNTED.equals(v.getState())) continue;
+            out.add(new File(root, SHARED));
+        }
+        return out;
+    }
+
+    private List<File> ownFolders() {
+        List<File> out = new ArrayList<>();
+        for (File dir : getExternalFilesDirs(null)) {
+            if (dir != null) out.add(new File(dir, "assets"));
+        }
+        return out;
+    }
+
+    // the same folders for native/game_files.cpp, from the game's thread: some phones (a Sony on Android 11) don't let
+    // the app list /storage, though each card's folder opens
+    public String[] cardFolderPaths() {
+        List<File> cards = cardFolders();
+        String[] out = new String[cards.size()];
+        for (int i = 0; i < out.length; i++) out[i] = cards.get(i).getPath();
+        return out;
+    }
+
+    public String[] ownFolderPaths() {
+        List<File> own = ownFolders();
+        String[] out = new String[own.size()];
+        for (int i = 0; i < out.length; i++) out[i] = own.get(i).getPath();
+        return out;
+    }
+
+    private void askAllFilesAccess() {
+        storageAsked = true;
+        if (!ALL_FILES_ACCESS) {
+            requestPermissions(new String[] {Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_REQUEST);
+            return;
+        }
+        show("One permission first", "Shadow the Hedgehog reads the game from a folder of yours, which Android only "
+                + "allows with all files access. It is the port's own, never the whole storage's contents: only the "
+                + "Shadow folder is opened.\n\nOn the settings page that opens, allow access to files and media.",
+                "Open settings", () -> {
+                    try {
+                        Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                        i.setData(Uri.parse("package:" + getPackageName()));
+                        startActivity(i);
+                    } catch (Exception e) {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                    }
+                }, "Not now", () -> notNow = true);
+    }
+
+    private void tellWhereTheGameGoes() {
+        File shared = new File(Environment.getExternalStorageDirectory(), SHARED);
+        show("Where the game goes", "Put the game in\n\n" + shared.getPath()
+                + "\n\neither its files (default.xbe and the rest) or its disc image as one .iso file. A folder on an SD "
+                + "card at the same place works too.\n\nYou can also pick the disc image here and the app copies it.",
+                "Import a disc image", this::startImport, "Close", null);
+    }
+
+    private void startImport() {
+        if (importer.pick()) return;
+        tellWhereTheGameGoes();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == GameImporter.REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) importImage(data.getData());
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private void importImage(Uri uri) {
+        File own = getExternalFilesDir(null);
+        File target = own != null ? new File(own, "assets") : null;
+        if (target == null) return;
+        target.mkdirs();
+        importer.copy(uri, target, ok -> {
+            if (ok) imported = true;
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == STORAGE_REQUEST) askForGame();
+    }
+
+    private void show(String title, String text, String positive, Runnable onPositive, String negative,
+                      Runnable onNegative) {
+        if (isFinishing()) return;
+        if (dialog != null && dialog.isShowing()) dialog.dismiss();
+        dialog = new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(text)
+                .setPositiveButton(positive, (d, w) -> {
+                    if (onPositive != null) onPositive.run();
+                })
+                .setNegativeButton(negative, (d, w) -> {
+                    if (onNegative != null) onNegative.run();
+                })
+                .show();
+    }
+}
