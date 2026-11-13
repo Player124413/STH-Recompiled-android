@@ -118,6 +118,10 @@ void CopyLog() {
     if (!CallActivity("copyLog", "()V")) LOGW("app: this build's activity has no copyLog");
 }
 
+void CheckForUpdates() {
+    if (!CallActivity("checkForUpdates", "()V")) LOGW("app: this build's activity has no checkForUpdates");
+}
+
 void ShowAbout() {
     if (!CallActivity("showAbout", "()V")) LOGW("app: this build's activity has no showAbout");
 }

@@ -31,6 +31,7 @@ void SetGameActive(bool active);
 bool GameActive();
 // the app closes and the launcher comes back (the menu's EXIT TO LAUNCHER)
 void ExitToLauncher();
+void CheckForUpdates();  // the newest release on GitHub, with "update now" or "later"
 void ShowAbout();  // the port's credits, English and Russian
 void CopyLog();   // the log's tail onto the clipboard
 void ShareLog();  // the log's tail to another app

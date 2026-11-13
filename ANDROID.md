@@ -31,6 +31,11 @@ Everything the PC build has, in a phone's shape:
   on-screen MENU button, Android's back gesture, or BACK + START on a pad. Changes are saved to `settings.toml` as they
   are made; the game's own pause comes up behind it (the menu taps START for the game).
 * **Quit to launcher** from the menu.
+* **Check for updates**: asks GitHub for the port's newest release and puts the choice up — *Update now* downloads the
+  APK the release carries and hands it to Android's installer (the same signing key, so it installs over this copy and
+  keeps the settings and the imported image), *Later* closes it. Nothing is checked at launch. A release without an
+  APK attached opens its page instead, and a repository with no releases says so. Reachable from the menu's ABOUT page
+  and from the about dialog.
 * **Who made it**: an "About this port" dialog — the port's author, the Telegram channel and the Black Android port it
   was modelled on, in English and in Russian, with buttons that open both links. It comes up once at the first launch
   and stays a tap away on the menu's ABOUT page.

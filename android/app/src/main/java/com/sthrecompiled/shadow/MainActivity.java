@@ -22,6 +22,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.text.method.LinkMovementMethod;
+import android.text.util.Linkify;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,6 +50,7 @@ public class MainActivity extends SDLActivity {
     private boolean notNow;       // the player turned the access down this run
     private boolean imported;     // a copy this run finished: the game looks for it by itself
     private boolean importing;    // a copy is running: no other dialog may come over its progress
+    private Updater updater;      // the GitHub release check, made when asked for
     private final GameImporter importer = new GameImporter(this);
 
     @Override
@@ -99,6 +102,7 @@ public class MainActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (updater != null) updater.afterPermissionScreen();  // an update waiting for "install unknown apps"
         if (!aboutSeen()) {
             showAbout(true);
             return;
@@ -190,7 +194,8 @@ public class MainActivity extends SDLActivity {
 
             TextView body = new TextView(this);
             body.setText(ABOUT_EN + "\n\n---\n\n" + ABOUT_RU);
-            body.setTextIsSelectable(true);  // the links can be copied out
+            body.setAutoLinkMask(Linkify.WEB_URLS);
+            body.setMovementMethod(LinkMovementMethod.getInstance());  // the channel and the port open on a tap
             int pad = Math.round(20 * getResources().getDisplayMetrics().density);
             body.setPadding(pad, pad / 2, pad, 0);
             ScrollView scroll = new ScrollView(this);
@@ -199,8 +204,7 @@ public class MainActivity extends SDLActivity {
             dialog = new AlertDialog.Builder(this)
                     .setTitle("About this port  /  Об этом порте")
                     .setView(scroll)
-                    .setPositiveButton("Telegram", (d, w) -> openUrl(TELEGRAM))
-                    .setNeutralButton("Black Android", (d, w) -> openUrl(BLACK_ANDROID))
+                    .setPositiveButton("Check for updates", (d, w) -> checkForUpdates())
                     .setNegativeButton("Close", null)
                     .setOnDismissListener(d -> {
                         dialog = null;
@@ -210,12 +214,18 @@ public class MainActivity extends SDLActivity {
         });
     }
 
-    private void openUrl(String url) {
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-        } catch (Exception e) {
-            toast("No app can open " + url);
-        }
+    // from the port menu and from the about dialog
+    public void checkForUpdates() {
+        runOnUiThread(() -> {
+            if (isFinishing()) return;
+            toast("Looking for a newer version…");
+            updater().check(versionName());
+        });
+    }
+
+    private Updater updater() {
+        if (updater == null) updater = new Updater(this);
+        return updater;
     }
 
     // ---- the log

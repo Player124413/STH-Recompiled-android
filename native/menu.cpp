@@ -333,6 +333,7 @@ void AboutPage() {
     ImGui::Dummy(ImVec2(0, 8));
     ImGui::TextWrapped("Shadow the Hedgehog is a trademark of SEGA. This project is not affiliated with SEGA.");
     ImGui::PopStyleColor();
+    if (ButtonRow("CHECK FOR UPDATES", IM_COL32(200, 170, 90, 255))) host::CheckForUpdates();
     if (ButtonRow("ABOUT THIS PORT", IM_COL32(200, 170, 90, 255))) host::ShowAbout();
     Section("LOG");
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));

@@ -17,6 +17,8 @@
     <!-- the game's files in a folder of their own on the shared storage, when the player allows it -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- the update the port downloads from GitHub, handed to Android's installer -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Android 10, which has no all files access: the Shadow folder made and an imported image copied into it -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
@@ -45,5 +47,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- the downloaded update, readable by the installer alone -->
+        <provider
+            android:name=".UpdateFiles"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
