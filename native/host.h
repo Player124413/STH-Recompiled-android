@@ -64,6 +64,8 @@ extern bool g_hd_scene;        // the 512x512 3D scene target gets 640/512 more 
 extern bool g_dynamic_res;     // the render resolution follows the frame rate
 extern uint32_t g_min_percent; // dynamic resolution's floor, percent of the screen's height
 extern uint32_t g_texture_filter;  // 0 linear, 1 point
+// 2 automatic (render passes on ARM Mali), 1 dynamic rendering, 0 render passes; read when the device is made
+extern uint32_t g_dynamic_rendering;
 
 // touch controls
 extern bool g_touch_controls;

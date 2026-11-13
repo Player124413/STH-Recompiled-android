@@ -17,6 +17,7 @@ bool g_hd_scene = true;         // the HD scene target (shadow::g_hd_scene, src/
 bool g_dynamic_res = true;      // the render resolution follows the frame rate
 uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the screen's height
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
+uint32_t g_dynamic_rendering = 2;  // 2 automatic (render passes on ARM Mali), 1 dynamic rendering, 0 render passes
 bool g_touch_controls = true;
 bool g_vibration = true;
 uint32_t g_camera_speed = 200;  // percent: how fast a drag turns the camera
@@ -56,6 +57,7 @@ void ResetDefaults() {
     g_dynamic_res = true;
     g_min_percent = 40;
     g_texture_filter = 0;
+    g_dynamic_rendering = 2;
     g_touch_controls = true;
     g_vibration = true;
     g_camera_speed = 200;

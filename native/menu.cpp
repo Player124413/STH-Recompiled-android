@@ -238,12 +238,25 @@ void DisplayPage() {
     }
 }
 
+const char* DynamicRenderingName() {
+    switch (port::g_dynamic_rendering) {
+        case 0: return "OFF (RENDER PASSES)";
+        case 1: return "ON";
+        default: return "AUTOMATIC";
+    }
+}
+
 void GraphicsPage() {
     Section("THE PORT");
     if (ToggleRow("HD 3D WORLD", port::g_hd_scene)) {
         port::g_hd_scene = !port::g_hd_scene;
         shadow::g_hd_scene = port::g_hd_scene;
         Save();
+    }
+    if (Row("DYNAMIC RENDERING", DynamicRenderingName(), IM_COL32(240, 120, 110, 255), true)) {
+        port::g_dynamic_rendering = (port::g_dynamic_rendering + 2) % 3;  // automatic -> on -> off -> automatic
+        Save();
+        LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
     }
     if (ToggleRow("WIDESCREEN 16:9", g_widescreen)) {
         g_widescreen = !g_widescreen;

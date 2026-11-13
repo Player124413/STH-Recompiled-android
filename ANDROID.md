@@ -39,6 +39,11 @@ Everything the PC build has, in a phone's shape:
 * **Who made it**: an "About this port" dialog — the port's author, the Telegram channel and the Black Android port it
   was modelled on, in English and in Russian, with buttons that open both links. It comes up once at the first launch
   and stays a tap away on the menu's ABOUT page.
+* **Dynamic rendering**: the backend draws through `vkCmdBeginRendering` where the driver has it and through render
+  passes where it does not. It is now AUTOMATIC by default: on ARM Mali it goes the render-pass way, because the same
+  frames that came out right through render passes showed the scene's effects as hard-edged wedges of the picture when
+  drawn with dynamic rendering (a Mali-G57 with Vulkan 1.3; Adreno with Vulkan 1.1 is unaffected, it never had the
+  choice). GRAPHICS → DYNAMIC RENDERING switches it: AUTOMATIC, ON, OFF, taken at the next start.
 * **Graphics report**: GRAPHICS REPORT on the menu's GRAPHICS page writes what the frames so far asked of the GPU into
   the log — draws, point and point-sprite draws, reads of a render target while drawing into it, wide taps, targets
   made, texture uploads, ring flushes, pipelines — with the device's own capabilities beside it (BC/ASTC/ETC2, point

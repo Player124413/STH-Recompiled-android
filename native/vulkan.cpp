@@ -1250,6 +1250,13 @@ bool VulkanBackend::PickDevice() {
                 want(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
             }
             dynamic_ = dynamic;
+            if (port::g_dynamic_rendering == 0) dynamic_ = false;
+            if (dynamic_ && port::g_dynamic_rendering == 2 && props_.vendorID == 0x13B5) {
+                // ARM Mali, automatically: the same frame through render passes is right where dynamic rendering
+                // showed the scene's effects as hard edged wedges of the picture. ON in the menu overrides it
+                dynamic_ = false;
+                LOGR("vulkan: render passes on ARM Mali (dynamic rendering is not trusted here)");
+            }
             // the 1.1 drivers' timeline extension lost the device on the first submit (Mali-G76): fences there
             timeline_ok_ = api >= VK_API_VERSION_1_2;
             if (!dynamic_) LOGR("vulkan: no dynamic rendering, using render passes");
@@ -1329,8 +1336,10 @@ bool VulkanBackend::CreateDevice() {
     depth_linear_ = fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
     vkGetPhysicalDeviceFormatProperties(pd_, VK_FORMAT_R32_SFLOAT, &fp);
     r32f_linear_ = fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-    LOGI("vulkan: depth %s, BC textures %s", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
-         bc_ ? "on the GPU" : "decoded on the CPU");
+    LOGI("vulkan: depth %s, BC textures %s, dynamic rendering %s, point size %g to %g, lod bias %g",
+         depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8", bc_ ? "on the GPU" : "decoded on the CPU",
+         dynamic_ ? "yes" : "no (render passes)", double(props_.limits.pointSizeRange[0]),
+         double(props_.limits.pointSizeRange[1]), double(props_.limits.maxSamplerLodBias));
     return true;
 }
 
@@ -3366,8 +3375,8 @@ void VulkanBackend::Present(const Surface& front) {
     }
     presents_++;
     presents_seen_.store(presents_);
-    if (presents_ == 30) Report("first frames");
-    else if (presents_ == 300 || presents_ == 1800) Report("running");
+    if (presents_ == 10) Report("first frames");
+    else if (presents_ == 120 || presents_ == 600 || presents_ == 1800) Report("running");
     frame_++;
     Frame& next = CurrentFrame();
     ResetFrame(next);
