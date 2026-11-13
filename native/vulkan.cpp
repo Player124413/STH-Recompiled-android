@@ -886,6 +886,7 @@ public:
     void Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) override;
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
+    void DumpFrame() { dump_left_ = 1; }
     void Sync(uint32_t data, uint32_t size) override;
     void SyncLate(uint32_t data) override;
     bool DeliverLate(uint32_t data) override;
@@ -999,6 +1000,7 @@ private:
     bool Shrink(Image& src, uint32_t w, uint32_t h, Image& down, uint32_t taps = 1);
     Image* CopySource(Target& t, Image& down);
     bool ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint8_t>& out);
+    void DumpTargets();
 
     // draws
     void EnsureVertexShader(const State& s, const Assembled& a, DrawShaders& sh);
@@ -1122,6 +1124,7 @@ private:
     uint64_t presents_ = 0;
     // what the frames asked of the GPU; Report() puts it in the log, once early and once the title is running, and
     // whenever the player asks from the menu. A wrong picture on one driver and not another is told apart here
+    int dump_left_ = 0;  // the frames still to be written out as PNGs, from the menu's DUMP FRAME
     uint64_t diag_draws_ = 0, diag_points_ = 0, diag_sprites_ = 0, diag_wide_ = 0, diag_feedback_ = 0,
              diag_targets_ = 0, diag_flushes_ = 0, diag_pipes_ = 0, diag_uploads_ = 0;
     VkPhysicalDeviceFeatures caps_{};  // everything the GPU offers, for the report
@@ -2302,6 +2305,95 @@ VkSampler VulkanBackend::StageSampler(const State& s, int i, const DrawTextures&
     return Sampler(sd);
 }
 
+// ---- a frame's targets as PNGs
+
+// PNG with stored deflate blocks: no library, no compression, and any viewer opens what comes out. Used by the menu's
+// DUMP FRAME, which is how a picture that comes out wrong gets looked at pass by pass instead of guessed at.
+namespace {
+
+uint32_t Crc32(const uint8_t* data, size_t n, uint32_t crc = 0xFFFFFFFFu) {
+    static std::array<uint32_t, 256> table{};
+    static bool once = [] {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+        return true;
+    }();
+    (void)once;
+    for (size_t i = 0; i < n; i++) crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    return crc;
+}
+
+uint32_t Adler32(const uint8_t* data, size_t n) {
+    uint32_t a = 1, b = 0;
+    for (size_t i = 0; i < n; i++) {
+        a = (a + data[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    return (b << 16) | a;
+}
+
+void Put32(std::vector<uint8_t>& v, uint32_t x) {
+    v.push_back(uint8_t(x >> 24));
+    v.push_back(uint8_t(x >> 16));
+    v.push_back(uint8_t(x >> 8));
+    v.push_back(uint8_t(x));
+}
+
+void Chunk(std::vector<uint8_t>& out, const char* type, const std::vector<uint8_t>& body) {
+    Put32(out, uint32_t(body.size()));
+    std::vector<uint8_t> both = {uint8_t(type[0]), uint8_t(type[1]), uint8_t(type[2]), uint8_t(type[3])};
+    both.insert(both.end(), body.begin(), body.end());
+    out.insert(out.end(), both.begin(), both.end());
+    Put32(out, Crc32(both.data(), both.size()) ^ 0xFFFFFFFFu);
+}
+
+// rgba, rows top down
+bool WritePng(const std::filesystem::path& path, uint32_t w, uint32_t h, const std::vector<uint8_t>& rgba) {
+    std::vector<uint8_t> raw;
+    raw.reserve(size_t(w * h * 4 + h));
+    for (uint32_t y = 0; y < h; y++) {
+        raw.push_back(0);  // filter: none
+        const uint8_t* row = rgba.data() + size_t(y) * w * 4;
+        raw.insert(raw.end(), row, row + size_t(w) * 4);
+    }
+    std::vector<uint8_t> z = {0x78, 0x01};
+    size_t at = 0;
+    while (at < raw.size()) {
+        size_t n = std::min<size_t>(65535, raw.size() - at);
+        bool last = at + n == raw.size();
+        z.push_back(last ? 1 : 0);
+        z.push_back(uint8_t(n));
+        z.push_back(uint8_t(n >> 8));
+        z.push_back(uint8_t(~n));
+        z.push_back(uint8_t(~n >> 8));
+        z.insert(z.end(), raw.begin() + long(at), raw.begin() + long(at + n));
+        at += n;
+    }
+    Put32(z, Adler32(raw.data(), raw.size()));
+
+    std::vector<uint8_t> out = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    std::vector<uint8_t> ihdr;
+    Put32(ihdr, w);
+    Put32(ihdr, h);
+    ihdr.push_back(8);  // bits a channel
+    ihdr.push_back(6);  // RGBA
+    ihdr.push_back(0);
+    ihdr.push_back(0);
+    ihdr.push_back(0);
+    Chunk(out, "IHDR", ihdr);
+    Chunk(out, "IDAT", z);
+    Chunk(out, "IEND", {});
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
+    return bool(f);
+}
+
+}  // namespace
+
 // ---- targets
 
 Target* VulkanBackend::FindTarget(const Surface& s, bool depth) {
@@ -2506,6 +2598,34 @@ bool VulkanBackend::ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint
     out.assign(rb.mem.map, rb.mem.map + size_t(w) * h * 4);
     Destroy(rb);
     return true;
+}
+
+// the colour targets of the frame before this one, the largest first, into dumps/ beside the settings: a picture that
+// comes out wrong, pass by pass, instead of guessed at from a screenshot
+void VulkanBackend::DumpTargets() {
+    std::error_code ec;
+    std::filesystem::path dir = app::ExeDir() / "dumps";
+    std::filesystem::create_directories(dir, ec);
+    std::vector<Target*> list;
+    for (auto& [key, t] : targets_)
+        if (!t.depth && t.img && t.w >= 64 && t.h >= 64) list.push_back(&t);
+    std::sort(list.begin(), list.end(),
+              [](const Target* a, const Target* b) { return size_t(a->w) * a->h > size_t(b->w) * b->h; });
+    int n = 0;
+    for (Target* t : list) {
+        if (n == 8) break;
+        std::vector<uint8_t> px;
+        Transition(t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        if (!ReadBack(t->img, t->w, t->h, px)) continue;
+        for (size_t i = 0; i + 3 < px.size(); i += 4) std::swap(px[i], px[i + 2]);  // BGRA to RGBA
+        char name[80];
+        std::snprintf(name, sizeof(name), "frame_%llu_%08X_%ux%u.png", (unsigned long long)presents_, t->data, t->w,
+                      t->h);
+        if (!WritePng(dir / name, t->w, t->h, px)) continue;
+        LOGI("vulkan: dumped %s", name);
+        n++;
+    }
+    LOGI("vulkan: frame %llu written out, %d targets into %s", (unsigned long long)presents_, n, dir.string().c_str());
 }
 
 // ---- draws
@@ -3374,6 +3494,10 @@ void VulkanBackend::SavePipelineCache() {
 }
 
 void VulkanBackend::Present(const Surface& front) {
+    if (dump_left_ > 0) {
+        dump_left_--;
+        DumpTargets();  // the targets still hold the frame that was drawn last
+    }
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if (ramp_dirty_) UploadGammaRamp();
@@ -3442,8 +3566,13 @@ void GraphicsReport() {
     if (g_vulkan) g_vulkan->Report("asked");
 }
 
+void DumpFrame() {
+    if (g_vulkan) g_vulkan->DumpFrame();
+}
+
 }  // namespace gpu
 
 namespace host {
 void GraphicsReport() { gpu::GraphicsReport(); }
+void DumpFrame() { gpu::DumpFrame(); }
 }  // namespace host

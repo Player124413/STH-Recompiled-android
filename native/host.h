@@ -32,6 +32,7 @@ bool GameActive();
 // the app closes and the launcher comes back (the menu's EXIT TO LAUNCHER)
 void ExitToLauncher();
 void GraphicsReport();  // what the frames so far asked of the GPU, into the log
+void DumpFrame();       // the frame's render targets as PNG files under dumps/, for a picture that comes out wrong
 void CheckForUpdates();  // the newest release on GitHub, with "update now" or "later"
 void ShowAbout();  // the port's credits, English and Russian
 void CopyLog();   // the log's tail onto the clipboard

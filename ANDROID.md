@@ -52,6 +52,8 @@ Everything the PC build has, in a phone's shape:
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame
   with no scene in it. TIMELINE is still there to compare, at the next start.
+* **Dump frame**: GRAPHICS → DUMP FRAME AS PNG writes the frame's render targets into `dumps/` beside the settings, the
+  largest first, so a picture that comes out wrong can be looked at pass by pass instead of guessed at from a screenshot.
 * **Graphics report**: GRAPHICS REPORT on the menu's GRAPHICS page writes what the frames so far asked of the GPU into
   the log — draws, point and point-sprite draws, reads of a render target while drawing into it, wide taps, targets
   made, texture uploads, ring flushes, pipelines — with the device's own capabilities beside it (BC/ASTC/ETC2, point

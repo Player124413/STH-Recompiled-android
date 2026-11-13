@@ -277,6 +277,10 @@ void GraphicsPage() {
         Save();
     }
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
+    if (ButtonRow("DUMP FRAME AS PNG", IM_COL32(200, 170, 90, 255))) {
+        host::DumpFrame();
+        LOGI("port: the next frame is written out into dumps/");
+    }
     Section("CUTSCENES");
     if (ToggleRow("SKIP CUTSCENES", g_skip_cutscenes)) {
         g_skip_cutscenes = !g_skip_cutscenes;
