@@ -250,7 +250,7 @@ void GraphicsPage() {
         ApplyWidescreen();
         Save();
     }
-    if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) port::GraphicsReport();
+    if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     Section("CUTSCENES");
     if (ToggleRow("SKIP CUTSCENES", g_skip_cutscenes)) {
         g_skip_cutscenes = !g_skip_cutscenes;

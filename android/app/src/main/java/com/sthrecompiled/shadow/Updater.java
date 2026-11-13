@@ -31,7 +31,9 @@ import java.util.List;
 //
 // Nothing is checked at launch: the port only talks to GitHub when the player asks it to.
 final class Updater {
-    static final String API = "https://api.github.com/repos/Player124413/STH-Recompiled/releases/latest";
+    // the repository was renamed once already: the newest name first, the old one as a fallback
+    static final String[] API = {"https://api.github.com/repos/Player124413/STH-Recompiled-android/releases/latest",
+                                 "https://api.github.com/repos/Player124413/STH-Recompiled/releases/latest"};
     private static final String TAG = "ShadowUpdate";
     private static final int NOTES_CHARS = 700;
 
@@ -67,7 +69,15 @@ final class Updater {
 
     // null when the repository has no release yet
     private Release fetch() throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(API).openConnection();
+        for (String api : API) {
+            Release r = fetch(api);
+            if (r != null) return r;  // null: this name has no release either, try the next
+        }
+        return null;
+    }
+
+    private Release fetch(String api) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(api).openConnection();
         c.setConnectTimeout(10000);
         c.setReadTimeout(15000);
         c.setRequestProperty("Accept", "application/vnd.github+json");

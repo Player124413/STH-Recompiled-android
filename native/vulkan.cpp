@@ -3410,6 +3410,6 @@ void GraphicsReport() {
 
 }  // namespace gpu
 
-namespace port {
+namespace host {
 void GraphicsReport() { gpu::GraphicsReport(); }
-}  // namespace port
+}  // namespace host
