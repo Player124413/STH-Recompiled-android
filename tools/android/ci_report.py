@@ -6,6 +6,9 @@ reports why it broke without anyone opening the run page:
 
     ./gradlew ... 2>&1 | tee /tmp/build.log; st=${PIPESTATUS[0]}
     [ $st -eq 0 ] || python3 tools/android/ci_report.py /tmp/build.log
+
+With --plain it prints the same excerpt as text instead (the workflow puts that in a check run, whose summary can be
+read back through the API when the run's own log cannot).
 """
 
 import re
@@ -38,7 +41,7 @@ def blocks(lines):
     return ["\n".join(lines[lo:hi]) for lo, hi in spans]
 
 
-def report(path, limit=MAX_MESSAGES):
+def report(path, limit=MAX_MESSAGES, plain=False):
     try:
         lines = open(path, errors="replace").read().splitlines()
     except OSError as e:
@@ -61,12 +64,16 @@ def report(path, limit=MAX_MESSAGES):
         out = ["(nothing in the log matched, last lines)\n" + tail[-MAX_CHARS:]]
 
     for i, body in enumerate(out, 1):
-        print(f"::error title=failed {i}/{len(out)}::{escape(body)}")
+        if plain:
+            print(f"--- failed {i}/{len(out)}\n{body}\n")
+        else:
+            print(f"::error::{escape(body)}")
     return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
         print(__doc__)
         sys.exit(2)
-    sys.exit(report(sys.argv[1]))
+    sys.exit(report(args[0], plain="--plain" in sys.argv))
