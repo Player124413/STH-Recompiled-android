@@ -42,10 +42,19 @@ android {
         }
     }
 
-    // the release key from SHADOW_KEYSTORE (a .jks path) and its passwords
+    // The key every build is signed with, so an update installs over the copy already on the phone instead of asking
+    // for an uninstall first. It is in the repository on purpose and is the same in CI and on a PC: it is a sideload
+    // identity, not a store one. To sign with your own, set SHADOW_KEYSTORE (a keystore path) and its three passwords.
     def keystore = System.getenv("SHADOW_KEYSTORE")
+    def ownKey = keystore != null
     signingConfigs {
-        if (keystore) {
+        debug {
+            storeFile ownKey ? file(keystore) : file("../keystore/shadow.keystore")
+            storePassword ownKey ? System.getenv("SHADOW_KEYSTORE_PASSWORD") : "shadowandroid"
+            keyAlias ownKey ? System.getenv("SHADOW_KEY_ALIAS") : "shadow"
+            keyPassword ownKey ? System.getenv("SHADOW_KEY_PASSWORD") : "shadowandroid"
+        }
+        if (ownKey) {
             release {
                 storeFile file(keystore)
                 storePassword System.getenv("SHADOW_KEYSTORE_PASSWORD")
@@ -58,8 +67,14 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            // without the release key a debug signature, so the release APK installs as it is
-            signingConfig keystore ? signingConfigs.release : signingConfigs.debug
+            // the project's key unless SHADOW_KEYSTORE says otherwise: the same identity in CI and on a PC
+            signingConfig ownKey ? signingConfigs.release : signingConfigs.debug
+            externalNativeBuild {
+                cmake {
+                    // AGP would pick RelWithDebInfo and carry the debug info into the APK
+                    arguments "-DCMAKE_BUILD_TYPE=Release"
+                }
+            }
         }
         debug {
             // the recompiled code is far too slow unoptimized

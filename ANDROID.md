@@ -16,9 +16,11 @@ Everything the PC build has, in a phone's shape:
 * **The full picture**: 16:9 Hor+ widescreen with the widescreen 2D layer squeezed back to its own shape, the HD 3D
   world (512×512 render targets), anisotropic filtering, the HD texture/menu fonts from `src/common/pc_text.cpp`.
 * **Cutscene skip** and **cutscenes at 60 FPS**, as the PC build's hooks.
-* **Touch controls**: two sticks, A/B/X/Y, BLACK/WHITE, LT/RT, START/BACK and a MENU button — floating or fixed
-  sticks, adjustable size and opacity, three presets (Modern, Compact, Split) and a layout editor you drag controls
-  around in. The layout is `touch.toml` beside `settings.toml`.
+* **Touch controls**: the console's own buttons and nothing else — A/B/X/Y in the Xbox diamond (Y above, X left,
+  B right, A below), LT/RT, START and the port's MENU button, plus a move stick that is floating or fixed. **The
+  camera is the screen**: drag anywhere that is not a button and the view turns by how far the finger went, at the
+  speed set by CAMERA SPEED. Buttons can be resized, faded, moved with the layout editor, and three presets (Modern,
+  Compact, Split) give a starting point; the layout is `touch.toml` beside `settings.toml`.
 * **Controllers**: every pad SDL3 knows (Xbox, DualSense, Switch Pro, generic HID) plays as it does on the console,
   with rumble. Controllers Android hands the app as a "virtual device" SDL ignores still play: the activity forwards
   their keys and axes to port 0.
@@ -62,7 +64,18 @@ Gradle 8.7 through the wrapper), plus a phone or tablet with arm64 and Vulkan 1.
 
    Gradle clones SDL3 (`android/third_party/SDL`) and CMake fetches glslang, toml++ and ImGui. To build from a
    recompiled tree somewhere else, pass `-PxbeGenerated=<dir>` (and `-PxbeImage=<default.xbe>`).
-3. Install `android/app/build/outputs/apk/debug/app-debug.apk` and copy or import the game.
+3. Install `android/app/build/outputs/apk/release/app-release.apk` and copy or import the game.
+
+### Updating without uninstalling
+
+Every build — CI's and a PC's — is signed with the same key, `android/keystore/shadow.keystore`, and the workflow
+gives each build a higher version code (the run number), so a new APK installs straight over the last one and keeps the
+game files, saves and settings. The key is in the repository on purpose: it is a sideload identity, not a store one,
+and keeping it the same is what makes updates work. To sign with a key of your own instead, set `SHADOW_KEYSTORE` (a
+keystore path) and `SHADOW_KEYSTORE_PASSWORD`, `SHADOW_KEY_ALIAS`, `SHADOW_KEY_PASSWORD`; every build after that switch
+needs one last uninstall, and then updates work again.
+
+Builds made before this (signed with a throwaway debug key) cannot be updated over — one last uninstall of those.
 
 ### Building it on GitHub's runners
 

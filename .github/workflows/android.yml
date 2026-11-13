@@ -137,8 +137,10 @@ jobs:
         run: |
           set -uo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace --console=plain assembleDebug \
-            -PshadowNdk="$SHADOW_NDK" -PshadowCmake="$SHADOW_CMAKE" 2>&1 | tee /tmp/build.log
+          # release, not debug: it is signed with the key in android/keystore, so it installs over the last one
+          ./gradlew --no-daemon --stacktrace --console=plain assembleRelease \
+            -PshadowNdk="$SHADOW_NDK" -PshadowCmake="$SHADOW_CMAKE" \
+            -PversionCode="$GITHUB_RUN_NUMBER" -PversionName="1.0.$GITHUB_RUN_NUMBER" 2>&1 | tee /tmp/build.log
           st=${PIPESTATUS[0]}
           if [ $st -ne 0 ]; then python3 ../tools/android/ci_report.py /tmp/build.log; fi
           exit $st
@@ -179,6 +181,8 @@ jobs:
             echo "APK: $(basename "$APK"), $(du -h "$APK" | cut -f1)"
             echo "built with: $([ -n "${ISO_URL}" ] && echo 'the game' || echo 'no game code (shell)')"
             unzip -l "$APK" | grep -E "\.so$|\.dex$" || true
+            APKSIGNER=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/apksigner | tail -1)
+            "$APKSIGNER" verify --print-certs "$APK" 2>&1 | grep -E "Signer #1 certificate (DN|SHA-256)" || true
             for so in libmain.so libSDL3.so; do
               echo
               echo "$so:"
@@ -200,6 +204,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shadow-android-${{ env.ISO_URL != '' && 'game' || 'shell' }}
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7

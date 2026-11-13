@@ -82,7 +82,7 @@ void Reset();
 // The touch controls, their layout editor and the button look (native/touch.cpp).
 namespace touch {
 
-enum class Preset : uint32_t { TwoThumbs, ThreeFinger, Classic, Count };
+enum class Preset : uint32_t { Modern, Compact, Split, Count };  // the three starting layouts
 extern const char* const kPresetNames[];
 
 // main thread

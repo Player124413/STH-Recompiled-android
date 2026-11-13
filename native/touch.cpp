@@ -1,6 +1,7 @@
-// The touch controls: two sticks, the face and shoulder buttons, START and BACK, drawn with ImGui over the game and
-// fed into port 0's pad. Every control can be dragged where the thumb wants it (the layout editor), the layout is
-// saved in touch.toml, and three presets give a starting point.
+// The touch controls: a move stick, the Xbox diamond of face buttons, the triggers, START and the port menu, drawn with
+// ImGui over the game and fed into port 0's pad. The camera is not a stick: dragging anywhere on the screen that is
+// not a control turns it, the way a phone is expected to work. Every control can be dragged where the thumb wants it
+// (the layout editor), the layout is saved in touch.toml, and three presets give a starting point.
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -31,8 +32,10 @@ float NowSeconds() {
     return std::chrono::duration<float>(clock::now().time_since_epoch()).count();
 }
 
+// the buttons of the console controller, and nothing else
 enum Part : int {
-    kMove, kLook, kA, kB, kX, kY, kBlack, kWhite, kLt, kRt, kStart, kBack, kMenu, kParts, kNone = -1
+    kMove, kA, kB, kX, kY, kLt, kRt, kStart, kMenu, kParts, kNone = -1,
+    kCamera = -2  // not a control: a finger dragging the picture turns the camera
 };
 
 enum class Kind { Stick, Circle, Pill };
@@ -47,25 +50,24 @@ struct Info {
 };
 
 const ImU32 kGreen = IM_COL32(96, 190, 96, 255), kRed = IM_COL32(214, 74, 64, 255), kBlue = IM_COL32(74, 132, 224, 255),
-           kYellow = IM_COL32(226, 186, 74, 255), kInk = IM_COL32(190, 190, 200, 255), kWhiteInk = IM_COL32(232, 232, 238, 255),
-           kTrigger = IM_COL32(176, 176, 188, 255), kSystem = IM_COL32(206, 206, 216, 255);
+           kYellow = IM_COL32(226, 186, 74, 255), kTrigger = IM_COL32(176, 176, 188, 255),
+           kSystem = IM_COL32(206, 206, 216, 255);
 
-// the order is the draw order: sticks, buttons, then MENU
+// the order is the draw order: the move stick, the face buttons, the triggers, then MENU
 const Info kInfo[kParts] = {
     {kMove, "move", "MOVE", Kind::Stick, 0.17f, kSystem},
-    {kLook, "look", "CAMERA", Kind::Stick, 0.145f, kSystem},
-    {kA, "a", "A", Kind::Circle, 0.062f, kGreen},
-    {kB, "b", "B", Kind::Circle, 0.052f, kRed},
-    {kX, "x", "X", Kind::Circle, 0.052f, kBlue},
-    {kY, "y", "Y", Kind::Circle, 0.052f, kYellow},
-    {kBlack, "black", "BLACK", Kind::Pill, 0.052f, kInk},
-    {kWhite, "white", "WHITE", Kind::Pill, 0.052f, kWhiteInk},
+    {kA, "a", "A", Kind::Circle, 0.060f, kGreen},
+    {kB, "b", "B", Kind::Circle, 0.055f, kRed},
+    {kX, "x", "X", Kind::Circle, 0.055f, kBlue},
+    {kY, "y", "Y", Kind::Circle, 0.055f, kYellow},
     {kLt, "lt", "LT", Kind::Pill, 0.060f, kTrigger},
     {kRt, "rt", "RT", Kind::Pill, 0.060f, kTrigger},
     {kStart, "start", "START", Kind::Pill, 0.052f, kSystem},
-    {kBack, "back", "BACK", Kind::Pill, 0.045f, kSystem},
     {kMenu, "menu", "MENU", Kind::Pill, 0.050f, kRed},
 };
+
+// The Xbox diamond: Y on top, X on the left, B on the right, A at the bottom. The horizontal offsets are smaller
+// than the vertical one because the screen is wider than it is tall: on a phone held sideways this lands as a circle
 
 const Info& InfoOf(int part) { return kInfo[part]; }
 
@@ -78,35 +80,29 @@ using Layout = std::array<Place, kParts>;
 
 // Three starting points. Fractions of the screen, y down.
 const Layout kModern = {{
-    {0.16f, 0.72f, 1.0f},    // move
-    {0.82f, 0.78f, 1.0f},    // look
-    {0.95f, 0.565f, 1.05f},  // A
-    {0.86f, 0.565f, 1.0f},   // B
-    {0.95f, 0.43f, 1.0f},    // X
-    {0.86f, 0.43f, 1.0f},    // Y
-    {0.72f, 0.40f, 1.0f},    // black
-    {0.72f, 0.52f, 1.0f},    // white
-    {0.06f, 0.10f, 1.0f},    // LT
-    {0.94f, 0.10f, 1.0f},    // RT
-    {0.94f, 0.26f, 1.0f},    // START
-    {0.06f, 0.26f, 1.0f},    // BACK
-    {0.16f, 0.045f, 1.0f},   // MENU
+    {0.15f, 0.75f, 1.0f},    // move
+    {0.90f, 0.765f, 1.0f},   // A, the bottom of the diamond
+    {0.95f, 0.66f, 1.0f},    // B
+    {0.85f, 0.66f, 1.0f},    // X
+    {0.90f, 0.555f, 1.0f},   // Y
+    {0.075f, 0.115f, 1.0f},  // LT
+    {0.925f, 0.115f, 1.0f},  // RT
+    {0.925f, 0.275f, 1.0f},  // START
+    {0.075f, 0.045f, 1.0f},  // MENU
 }};
 
 // the same arrangement smaller and lower, for thumbs that want the screen's middle left alone
 const Layout kCompact = {{
-    {0.15f, 0.75f, 0.90f},   {0.80f, 0.80f, 0.90f}, {0.95f, 0.60f, 1.0f},  {0.862f, 0.60f, 0.95f},
-    {0.95f, 0.47f, 0.95f},   {0.862f, 0.47f, 0.95f}, {0.72f, 0.44f, 0.95f}, {0.72f, 0.56f, 0.95f},
-    {0.06f, 0.12f, 0.95f},   {0.94f, 0.12f, 0.95f},  {0.94f, 0.27f, 0.95f}, {0.06f, 0.27f, 0.95f},
-    {0.16f, 0.055f, 0.95f},
+    {0.14f, 0.78f, 0.90f},   {0.90f, 0.775f, 0.95f}, {0.944f, 0.68f, 0.90f}, {0.856f, 0.68f, 0.90f},
+    {0.90f, 0.585f, 0.90f},  {0.065f, 0.13f, 0.95f}, {0.935f, 0.13f, 0.95f}, {0.935f, 0.285f, 0.95f},
+    {0.075f, 0.055f, 0.95f},
 }};
 
-// buttons across the top, sticks in the bottom corners: the thumbs never cross
+// the diamond high on the right, the stick low on the left: the thumbs never cross
 const Layout kSplit = {{
-    {0.16f, 0.80f, 1.0f},    {0.84f, 0.80f, 1.0f},  {0.945f, 0.44f, 1.0f}, {0.855f, 0.30f, 1.0f},
-    {0.855f, 0.56f, 1.0f},   {0.76f, 0.44f, 1.0f},  {0.69f, 0.32f, 1.0f},  {0.69f, 0.55f, 1.0f},
-    {0.06f, 0.10f, 1.0f},    {0.94f, 0.10f, 1.0f},  {0.945f, 0.18f, 1.0f}, {0.06f, 0.25f, 1.0f},
-    {0.16f, 0.045f, 1.0f},
+    {0.15f, 0.82f, 1.0f},    {0.88f, 0.50f, 1.0f},   {0.927f, 0.40f, 1.0f},  {0.833f, 0.40f, 1.0f},
+    {0.88f, 0.30f, 1.0f},    {0.06f, 0.10f, 1.0f},   {0.94f, 0.10f, 1.0f},   {0.88f, 0.175f, 1.0f},
+    {0.075f, 0.045f, 1.0f},
 }};
 
 const char* const kPresetIds[] = {"modern", "compact", "split"};
@@ -114,7 +110,7 @@ const Layout* const kPresets[] = {&kModern, &kCompact, &kSplit};
 
 Layout g_layout = kModern;   // where the player put the controls
 Layout g_shown = kModern;    // what is drawn: a floating stick follows the thumb
-Preset g_preset = Preset::TwoThumbs;
+Preset g_preset = Preset::Modern;
 uint32_t g_opacity = 55;
 uint32_t g_scale = 100;
 bool g_floating = true;
@@ -124,7 +120,9 @@ bool g_editing = false;
 
 struct Live {
     std::atomic<bool> pressed[kParts];
-    std::atomic<float> move_x{0}, move_y{0}, look_x{0}, look_y{0};
+    std::atomic<float> move_x{0}, move_y{0};
+    // camera travel since the last frame, in screen heights: a frame turns the camera by how far the finger went
+    std::atomic<float> drag_x{0}, drag_y{0};
 } g_live;
 
 float g_last_touch = -100;
@@ -206,9 +204,7 @@ void DrawStick(ImDrawList* dl, const Info& info, const Place& place, float a, bo
     dl->AddCircleFilled(c, r * 1.08f, Fade(IM_COL32(8, 8, 12, 255), a * 0.32f), 48);
     dl->AddCircle(c, r * 1.08f, ring, 48, 2.5f);
     dl->AddCircle(c, r * 0.55f, Fade(IM_COL32(200, 200, 210, 255), a * 0.16f), 40, 1.5f);
-    float dx = info.part == kMove ? g_live.move_x.load() : g_live.look_x.load();
-    float dy = info.part == kMove ? g_live.move_y.load() : g_live.look_y.load();
-    ImVec2 knob(c.x + dx * r * 0.72f, c.y - dy * r * 0.72f);
+    ImVec2 knob(c.x + g_live.move_x.load() * r * 0.72f, c.y - g_live.move_y.load() * r * 0.72f);
     float kr = r * 0.44f;
     dl->AddCircleFilled(ImVec2(knob.x + 1.5f, knob.y + 2.5f), kr, Fade(IM_COL32(0, 0, 0, 255), a * 0.45f), 32);
     dl->AddCircleFilled(knob, kr, Fade(IM_COL32(34, 34, 40, 255), a * 0.92f), 32);
@@ -333,10 +329,7 @@ bool EditorTap(float nx, float ny) {
 
 // A floating stick's base is where the thumb landed: the layout's place until then, so the menu and the editor still
 // show a control in a place that makes sense.
-void HomeShowing() {
-    g_shown[kMove] = g_layout[kMove];
-    g_shown[kLook] = g_layout[kLook];
-}
+void HomeShowing() { g_shown[kMove] = g_layout[kMove]; }
 
 }  // namespace
 
@@ -481,38 +474,40 @@ int PartAt(float nx, float ny) {
         if (info.kind == Kind::Stick) continue;
         if (Hit(info, at, g_layout[i])) return i;
     }
-    for (int i = kMove; i <= kLook; i++) {
-        if (g_floating) {
-            // a floating stick comes up under the thumb, anywhere in its half below the shoulder buttons
-            bool left = i == kMove;
-            bool in_half = left ? nx < 0.45f : nx > 0.55f;
-            if (in_half && ny > 0.32f) return i;
-            continue;
-        }
-        if (Hit(kInfo[i], at, g_layout[i])) return i;
+    if (g_floating) {
+        // a floating stick comes up under the thumb, anywhere in its half below the shoulder buttons
+        if (nx < 0.45f && ny > 0.32f) return kMove;
+    } else if (Hit(kInfo[kMove], at, g_layout[kMove])) {
+        return kMove;
     }
-    return kNone;
+    // not a control: the finger drags the camera
+    return kCamera;
 }
 
 void FollowStick(Finger& f) {
-    const Info& info = InfoOf(f.part);
+    const Info& info = InfoOf(kMove);
     Pixels p = Screen();
-    float r = Unit(info, g_shown[f.part].scale) * 0.85f;
+    float r = Unit(info, g_shown[kMove].scale) * 0.85f;
     float dx = (f.x - f.ox) * p.w, dy = (f.y - f.oy) * p.h;
     float len = std::sqrt(dx * dx + dy * dy);
     if (len > r) {
         dx *= r / len;
         dy *= r / len;
     }
-    float vx = dx / r, vy = -dy / r;
-    if (f.part == kMove) {
-        g_live.move_x = vx;
-        g_live.move_y = vy;
-    } else {
-        float sens = float(port::g_camera_speed) / 100.0f;
-        g_live.look_x = std::clamp(vx * sens, -1.0f, 1.0f);
-        g_live.look_y = std::clamp(vy * sens, -1.0f, 1.0f);
-    }
+    g_live.move_x = dx / r;
+    g_live.move_y = -dy / r;
+}
+
+// The camera: the finger's travel since the last frame becomes the right stick's deflection for one frame, so the
+// distance dragged is the angle turned, whatever the frame rate. A held-still finger turns nothing.
+constexpr float kDragFullStick = 0.085f;  // of the screen's height in one frame for full deflection
+
+void DragCamera(float from_x, float from_y, float to_x, float to_y) {
+    Pixels p = Screen();
+    float dx = (to_x - from_x) * p.w / p.h, dy = to_y - from_y;  // both in screen heights
+    if (dx == 0 && dy == 0) return;
+    g_live.drag_x.store(std::clamp(g_live.drag_x.load() + dx, -1.0f, 1.0f));
+    g_live.drag_y.store(std::clamp(g_live.drag_y.load() + dy, -1.0f, 1.0f));
 }
 
 }  // namespace
@@ -551,17 +546,18 @@ bool OnEvent(const SDL_Event& e) {
         }
         int part = PartAt(f.x, f.y);
         f.part = part;
-        if (part == kMove || part == kLook) {
-            if (g_floating) g_shown[part] = Place{f.x, f.y, g_layout[part].scale};
-            f.ox = g_shown[part].x;
-            f.oy = g_shown[part].y;
-        } else if (part != kNone) {
+        if (part == kMove) {
+            if (g_floating) g_shown[kMove] = Place{f.x, f.y, g_layout[kMove].scale};
+            f.ox = g_shown[kMove].x;
+            f.oy = g_shown[kMove].y;
+        } else if (part != kCamera && part != kNone) {
             Press(part);
         }
     } else if (e.type == SDL_EVENT_FINGER_MOTION) {
         int slot = FindFinger(e.tfinger.fingerID);
         if (slot < 0) return false;
         Finger& f = g_fingers[slot];
+        float was_x = f.x, was_y = f.y;
         f.x = std::clamp(e.tfinger.x, 0.0f, 1.0f);
         f.y = std::clamp(e.tfinger.y, 0.0f, 1.0f);
         g_last_touch = NowSeconds();
@@ -574,7 +570,8 @@ bool OnEvent(const SDL_Event& e) {
             g_custom = true;
             return true;
         }
-        if (f.part == kMove || f.part == kLook) FollowStick(f);
+        if (f.part == kMove) FollowStick(f);
+        else if (f.part == kCamera) DragCamera(was_x, was_y, f.x, f.y);
     } else if (e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_CANCELED) {
         int slot = FindFinger(e.tfinger.fingerID);
         if (slot < 0) return false;
@@ -586,10 +583,6 @@ bool OnEvent(const SDL_Event& e) {
         if (f.part == kMove) {
             g_live.move_x = 0;
             g_live.move_y = 0;
-            HomeShowing();
-        } else if (f.part == kLook) {
-            g_live.look_x = 0;
-            g_live.look_y = 0;
             HomeShowing();
         } else if (f.part == kMenu) {
             Release(kMenu);
@@ -607,7 +600,10 @@ void Pump() {}
 // ---- into the console controller
 
 void Apply(int port, input::Pad& pad) {
-    if (port != 0 || !port::g_touch_controls || shadow::MenuOpen() || g_editing) return;
+    if (port != 0) return;  // the touch controls are the first controller's
+    // taken every frame, so travel does not pile up into a jump while the menu or the editor is up
+    float drag_x = g_live.drag_x.exchange(0), drag_y = g_live.drag_y.exchange(0);
+    if (!port::g_touch_controls || shadow::MenuOpen() || g_editing) return;
     // the console keeps a controller plugged into port 1; without this the game pauses as if it was pulled out
     pad.connected = true;
     float mx = g_live.move_x.load(), my = g_live.move_y.load();
@@ -615,10 +611,12 @@ void Apply(int port, input::Pad& pad) {
         pad.lx = int16_t(std::clamp(mx, -1.0f, 1.0f) * 32767.0f);
         pad.ly = int16_t(std::clamp(my, -1.0f, 1.0f) * 32767.0f);
     }
-    float rx = g_live.look_x.load(), ry = g_live.look_y.load();
-    if (rx * rx + ry * ry > 0.02f) {
-        pad.rx = int16_t(std::clamp(rx, -1.0f, 1.0f) * 32767.0f);
-        pad.ry = int16_t(std::clamp(ry, -1.0f, 1.0f) * 32767.0f);
+    float sens = float(port::g_camera_speed) / 100.0f;
+    float rx = std::clamp(drag_x / kDragFullStick * sens, -1.0f, 1.0f);
+    float ry = std::clamp(-drag_y / kDragFullStick * sens, -1.0f, 1.0f);
+    if (rx * rx + ry * ry > 0.0004f) {
+        pad.rx = int16_t(rx * 32767.0f);
+        pad.ry = int16_t(ry * 32767.0f);
     }
     auto press = [&](int part, int analog) {
         if (g_live.pressed[part].load()) pad.analog[analog] = 0xFF;
@@ -627,12 +625,9 @@ void Apply(int port, input::Pad& pad) {
     press(kB, 1);
     press(kX, 2);
     press(kY, 3);
-    press(kBlack, 4);
-    press(kWhite, 5);
     press(kLt, 6);
     press(kRt, 7);
     if (g_live.pressed[kStart].load()) pad.buttons |= 1u << 4;
-    if (g_live.pressed[kBack].load()) pad.buttons |= 1u << 5;
 }
 
 // ---- once a frame, inside the ImGui frame
@@ -653,12 +648,9 @@ void Draw() {
     }
     float idle = NowSeconds() - g_last_touch;
     float alpha = float(g_opacity) / 100.0f * (idle > 4.0f ? 0.55f : 1.0f);
-    for (int i = kMove; i <= kLook; i++) {
-        bool active = std::fabs(g_live.move_x.load()) + std::fabs(g_live.move_y.load()) > 0.01f ||
-                      std::fabs(g_live.look_x.load()) + std::fabs(g_live.look_y.load()) > 0.01f;
-        DrawStick(dl, kInfo[i], g_shown[i], alpha, active);
-    }
-    for (int i = kA; i <= kBack; i++) {
+    bool moving = std::fabs(g_live.move_x.load()) + std::fabs(g_live.move_y.load()) > 0.01f;
+    DrawStick(dl, kInfo[kMove], g_shown[kMove], alpha, moving);
+    for (int i = kA; i <= kStart; i++) {
         const Info& info = kInfo[i];
         bool pressed = g_live.pressed[i].load();
         if (info.kind == Kind::Pill) DrawPill(dl, info, g_shown[i], alpha, pressed);

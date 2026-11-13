@@ -280,8 +280,12 @@ void ControlsPage() {
     uint32_t alpha = touch::Opacity();
     step = RangeRow("OPACITY", alpha, "%", 10, 100);
     if (step) touch::SetOpacity(uint32_t(std::clamp<int>(int(alpha) + step * 5, 10, 100)));
-    if (Row("STICK", touch::FloatingStick() ? "FLOATING" : "FIXED", IM_COL32(240, 120, 110, 255), true))
+    if (Row("MOVE STICK", touch::FloatingStick() ? "FLOATING" : "FIXED", IM_COL32(240, 120, 110, 255), true))
         touch::SetFloatingStick(!touch::FloatingStick());
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
+    ImGui::TextWrapped("The camera is the screen: drag anywhere that is not a button. CAMERA SPEED is how far a drag "
+                       "turns it.");
+    ImGui::PopStyleColor();
     uint32_t camera = port::g_camera_speed;
     step = RangeRow("CAMERA SPEED", camera, "%", 50, 200);
     if (step) {
