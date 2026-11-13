@@ -167,17 +167,34 @@ jobs:
           gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" --input /tmp/checkrun.json > /dev/null \
             && echo "report posted" || echo "::warning::could not post the report"
 
+      # What is inside the APK: the libraries, their size, and that they can be mapped by a 16 KB page device
       - name: What was built
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
-          ls -l "$APK"
-          echo "### APK: $(basename "$APK"), $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${ISO_URL}" ]; then
-            echo "built with the game: playable" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "shell build: no game code in it, it stops at 'game not found'" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          READELF=$(ls "$ANDROID_SDK_ROOT"/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf | head -1)
+          {
+            echo "APK: $(basename "$APK"), $(du -h "$APK" | cut -f1)"
+            echo "built with: $([ -n "${ISO_URL}" ] && echo 'the game' || echo 'no game code (shell)')"
+            unzip -l "$APK" | grep -E "\.so$|\.dex$" || true
+            for so in libmain.so libSDL3.so; do
+              echo
+              echo "$so:"
+              "$READELF" -l "android/app/build/intermediates/cxx/Release"/*/obj/arm64-v8a/"$so" 2>/dev/null \
+                | grep -E "LOAD" | awk '{print "   LOAD align " $NF}' || echo "   (not found)"
+            done
+          } > /tmp/apk.txt 2>&1
+          cat /tmp/apk.txt
+          python3 - "$GITHUB_SHA" > /tmp/checkrun.json <<'PY'
+          import json, sys
+          print(json.dumps({"name": "apk-info", "head_sha": sys.argv[1], "status": "completed", "conclusion": "neutral",
+                            "output": {"title": "what is in the APK",
+                                       "summary": open("/tmp/apk.txt", errors="replace").read()[:60000]}}))
+          PY
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" --input /tmp/checkrun.json > /dev/null \
+            && echo "posted the APK's contents" || echo "::warning::could not post the APK's contents"
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
