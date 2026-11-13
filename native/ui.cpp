@@ -69,8 +69,9 @@ void SetStyle() {
     s.WindowPadding = ImVec2(18, 16);
     s.FramePadding = ImVec2(14, 10);
     s.ItemSpacing = ImVec2(12, 10);
-    s.ScrollbarSize = 10;
-    s.GrabMinSize = 22;
+    s.ScrollbarSize = 34;  // a thumb a finger can take
+    s.GrabMinSize = 34;
+    s.TouchExtraPadding = ImVec2(6, 6);
     ImVec4* c = s.Colors;
     const ImVec4 red(0.86f, 0.16f, 0.13f, 1.0f), red_dim(0.55f, 0.10f, 0.09f, 1.0f);
     c[ImGuiCol_Text] = ImVec4(0.93f, 0.92f, 0.91f, 1.0f);

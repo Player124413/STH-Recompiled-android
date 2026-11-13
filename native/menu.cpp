@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -87,6 +88,12 @@ std::string AnisoName() {
 
 float RowHeight() { return ImGui::GetFontSize() * 2.15f; }
 
+// a tap, not a drag: a finger that has moved has been scrolling the page, not choosing the row
+bool Tapped() {
+    if (!ImGui::IsItemHovered() || !ImGui::IsMouseReleased(ImGuiMouseButton_Left)) return false;
+    return ImGui::GetIO().MouseDragMaxDistanceSqr[0] < 12.0f * 12.0f;
+}
+
 void RowBackground(const ImVec2& a, const ImVec2& b, bool hovered, bool active) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImU32 bg = active ? IM_COL32(64, 24, 26, 255) : hovered ? IM_COL32(44, 26, 28, 255) : IM_COL32(24, 22, 25, 255);
@@ -101,7 +108,7 @@ bool Row(const char* label, const char* value, ImU32 value_color, bool value_lef
     ImVec2 a = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
     ImGui::InvisibleButton(label, ImVec2(w, h));
-    bool tapped = ImGui::IsItemClicked();
+    bool tapped = Tapped();
     bool hovered = ImGui::IsItemHovered();
     RowBackground(a, ImVec2(a.x + w, a.y + h), hovered, false);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -135,7 +142,7 @@ int RangeRow(const char* label, uint32_t value, const char* suffix, uint32_t lo,
     ImGui::InvisibleButton(label, ImVec2(w, h));
     bool hovered = ImGui::IsItemHovered();
     int step = 0;
-    if (ImGui::IsItemClicked()) {
+    if (Tapped()) {
         float mx = ImGui::GetIO().MousePos.x;
         step = mx < a.x + w * 0.25f ? -1 : mx > a.x + w * 0.75f ? 1 : 0;
         if (!step) step = 1;
@@ -162,7 +169,7 @@ bool ButtonRow(const char* label, ImU32 tint) {
     ImVec2 a = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
     ImGui::InvisibleButton(label, ImVec2(w, h));
-    bool tapped = ImGui::IsItemClicked();
+    bool tapped = Tapped();
     bool hovered = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImU32 bg = hovered ? IM_COL32(60, 24, 26, 255) : IM_COL32(24, 22, 25, 255);
@@ -448,13 +455,18 @@ void MenuUi(double fps) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
     ImGui::BeginChild("##page", ImVec2(size.x * 0.90f, size.y * 0.60f), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoBackground);
-    ImGui::SetWindowFontScale(std::max(0.6f, size.y / 900.0f));
+    ImGui::SetWindowFontScale(std::clamp(size.y / 1100.0f, 0.55f, 1.1f));
     switch (g_tab) {
         case kDisplay: DisplayPage(); break;
         case kGraphics: GraphicsPage(); break;
         case kControls: ControlsPage(); break;
         case kGame: GamePage(); break;
         default: AboutPage(); break;
+    }
+    // a phone scrolls a page by dragging it: ImGui itself only scrolls on the mouse wheel
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        float dy = ImGui::GetIO().MouseDelta.y;
+        if (std::fabs(dy) > 0.5f) ImGui::SetScrollY(ImGui::GetScrollY() - dy);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();

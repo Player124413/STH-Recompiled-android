@@ -2841,6 +2841,7 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     if (!BindStageTextures(s, stages) || !draw_rt_ && !draw_ds_) return;
     if (GlowComposite(s, stages)) return;
     PixelKey pk = MakePixelKey(s, stages.info);
+    pk.quad = sh.quad;
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
     if (!sh.vs || !sh.ps) return;
@@ -3297,10 +3298,8 @@ void VulkanBackend::Present(const Surface& front) {
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if (ramp_dirty_) UploadGammaRamp();
-    if (g_hud_squeeze > 0) {
-        PatchHud();  // the frame's 2D pieces placed from the whole frame
-        HudFrameEnd();
-    }
+    PatchHud();    // the frame's 2D pieces placed from the whole frame
+    HudFrameEnd();
     uint32_t index = 0;
     bool shown = AcquireImage(index);
     if (shown) {
