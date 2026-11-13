@@ -1,0 +1,54 @@
+// What the runtime asks of the game on Android: no window messages (there is no Win32), the touch controls and the
+// port's menu in place of the keyboard and the PC settings screen. Strings must be set; hooks may stay null.
+#include "app/app.h"
+#include "common/pc_text.h"
+#include "common/render_ext.h"
+#include "core/input.h"
+#include "host.h"
+
+namespace shadow {
+extern bool g_skip_cutscenes;  // src/game/hooks.cpp
+extern bool g_cutscene_60;     // src/game/hooks.cpp
+extern bool g_widescreen;      // src/game/hooks.cpp
+extern bool g_show_fps;        // native/menu.cpp
+void ApplyWidescreen();        // src/game/hooks.cpp
+}  // namespace shadow
+
+const app::GameInfo app::kGame = {
+    .title = L"Shadow the Hedgehog",
+    .short_title = L"Shadow",
+    .name = L"ShadowAndroid",
+    .log = "shadow",
+    .settings = "settings.toml",
+    .splash = L"splash",
+    .missing = L"Put the game's disc image (.iso) in the Shadow folder, or import it from the launcher.",
+    .images = {{"default.xbe", "Shadow"}},
+    .options = {{"skip_cutscenes", &shadow::g_skip_cutscenes, nullptr},
+                {"cutscene_60fps", &shadow::g_cutscene_60, nullptr},
+                {"hd_scene", &port::g_hd_scene, nullptr},
+                {"show_fps", &shadow::g_show_fps, nullptr},
+                {"widescreen", &shadow::g_widescreen, nullptr},
+                {"touch_controls", &port::g_touch_controls, nullptr},
+                {"dynamic_resolution", &port::g_dynamic_res, nullptr},
+                {"vibration", &port::g_vibration, nullptr},
+                {"texture_filter", nullptr, &port::g_texture_filter},
+                {"min_render_percent", nullptr, &port::g_min_percent},
+                {"camera_speed", nullptr, &port::g_camera_speed}},
+    .load = port::Load,
+    .save = port::Save,
+    .init = [] { shadow::InitPcText(); shadow::ApplyWidescreen(); port::Init(); },
+    .loaded = nullptr,
+    .window = nullptr,  // main.cpp starts the touch controls once ImGui exists
+    .message = nullptr,
+    .ui = [](double fps) { shadow::ApplyWidescreen(); shadow::MenuUi(fps); },
+    .pad = [](int port, input::Pad& pad) {
+        touch::Apply(port, pad);  // the touch controls are port 0's, under a real controller's
+        if (shadow::MenuPad(port, pad)) return;  // the menu has the input and has already set the pad
+        if (touch::Editing()) {  // the layout editor has it too
+            bool c = pad.connected;
+            pad = input::Pad{};
+            pad.connected = c;
+        }
+    },
+    .rumble = nullptr,
+};

@@ -1,0 +1,152 @@
+# Shadow the Hedgehog on Android
+
+An unofficial Android port of the original Xbox game, on the same static recompilation the PC build uses: the game's
+own x86 code is recompiled to ARM64 and runs as native code, drawn with Vulkan 1.1 through SDL3. No game code and no
+game files are shipped — the app is built from *your* disc image, and the phone reads it at runtime.
+
+This folder (`android/`) is the whole Android project: the Gradle files, the activity, the game importer, and the
+CMake build that links the SDK's portable runtime, the recompiled game code and the port's own host code in `native/`.
+
+## What the phone gets
+
+Everything the PC build has, in a phone's shape:
+
+* **60 FPS with frame pacing**, dynamic resolution (scales the render resolution to hold the target), V-Sync as an
+  option, an on-screen FPS counter.
+* **The full picture**: 16:9 Hor+ widescreen with the widescreen 2D layer squeezed back to its own shape, the HD 3D
+  world (512×512 render targets), anisotropic filtering, the HD texture/menu fonts from `src/common/pc_text.cpp`.
+* **Cutscene skip** and **cutscenes at 60 FPS**, as the PC build's hooks.
+* **Touch controls**: the console's own buttons and nothing else — A/B/X/Y in the Xbox diamond (Y above, X left,
+  B right, A below), LT/RT, START and the port's MENU button, plus a move stick that is floating or fixed. **The
+  camera is the screen**: drag anywhere that is not a button. The turn follows how fast the finger moves rather than
+  how far, so a drag turns the same amount at any frame rate; a few pixels of travel are ignored first, so tapping a
+  button never jolts the view, and the deflection is eased in and out instead of snapping. CAMERA SPEED (200% out of
+  the box, adjustable 50–400%) is the whole of it. Buttons can be resized, faded, moved with the layout editor, and
+  three presets (Modern, Compact, Split) give a starting point; the layout is `touch.toml` beside `settings.toml`, and
+  what is drawn is exactly what is saved.
+* **Controllers**: every pad SDL3 knows (Xbox, DualSense, Switch Pro, generic HID) plays as it does on the console,
+  with rumble. Controllers Android hands the app as a "virtual device" SDL ignores still play: the activity forwards
+  their keys and axes to port 0.
+* **The port menu**: `DISPLAY` / `GRAPHICS` / `CONTROLS` / `GAME` / `ABOUT`, in the port's dark red look, opened with the
+  on-screen MENU button, Android's back gesture, or BACK + START on a pad. Changes are saved to `settings.toml` as they
+  are made; the game's own pause comes up behind it (the menu taps START for the game).
+* **Quit to launcher** from the menu.
+* **Check for updates**: asks GitHub for the port's newest release and puts the choice up — *Update now* downloads the
+  APK the release carries and hands it to Android's installer (the same signing key, so it installs over this copy and
+  keeps the settings and the imported image), *Later* closes it. Nothing is checked at launch. A release without an
+  APK attached opens its page instead, and a repository with no releases says so. Reachable from the menu's ABOUT page
+  and from the about dialog.
+* **Who made it**: an "About this port" dialog — the port's author, the Telegram channel and the Black Android port it
+  was modelled on, in English and in Russian, with buttons that open both links. It comes up once at the first launch
+  and stays a tap away on the menu's ABOUT page.
+* **Graphics report**: GRAPHICS REPORT on the menu's GRAPHICS page writes what the frames so far asked of the GPU into
+  the log — draws, point and point-sprite draws, reads of a render target while drawing into it, wide taps, targets
+  made, texture uploads, ring flushes, pipelines — with the device's own capabilities beside it (BC/ASTC/ETC2, point
+  size range, depth format, dynamic rendering, render scale). It also lands at the first frames and once the title is
+  running, so a picture that is wrong on one driver and not another can be told apart without a debugger.
+* **The log in one tap**: `COPY LOG` on the menu's ABOUT page puts the last 3000 lines on the clipboard, `SEND LOG` hands
+  them to any app; the launcher's "where the game goes" dialog has `COPY LOG` too, for when the game never starts.
+* Saves, settings, caches and logs beside the app's own files, so nothing needs a permission to write.
+
+## Where the game goes
+
+The app reads the game from, in order:
+
+1. its own folder on the phone: `Android/data/com.sthrecompiled.shadow/files/assets/` (used by the importer),
+2. `/storage/emulated/0/Shadow/`,
+3. `Shadow/` at the top of any SD card or USB stick.
+
+Each of those may hold either the game's own files (`default.xbe` and the rest, as the PC build's `assets/` has them)
+or a **single disc image** (`.iso`). The app checks the image's SHA-1: it must be the USA release the recompiled code
+was made from.
+
+Reading `/storage/emulated/0/Shadow` needs *all files access*, a special access Android grants on a settings page of its
+own. The activity asks for it at launch and explains where the game goes; the game itself waits for the files and
+starts as soon as it finds them, so importing the disc image from the app (IMPORT A DISC IMAGE) works without
+restarting the app.
+
+## Building
+
+Requirements: a PC with the Android toolchain (JDK 17–21, Android SDK 34, NDK `28.2.13676358`, CMake `3.31.6`,
+Gradle 8.7 through the wrapper), plus a phone or tablet with arm64 and Vulkan 1.1.
+
+1. **Recompile the game once on a PC**, as the PC build does (`build.bat` on Windows): it writes `config/game.toml`,
+   `assets/default.xbe` and the recompiled code in `generated/game`. This step needs the Windows toolchain the SDK's
+   recompiler uses; the Android build takes its output as it is.
+2. **Build the APK**:
+
+   ```
+   cd android
+   ../gradlew assembleDebug        # or assembleRelease
+   ```
+
+   Gradle clones SDL3 (`android/third_party/SDL`) and CMake fetches glslang, toml++ and ImGui. To build from a
+   recompiled tree somewhere else, pass `-PxbeGenerated=<dir>` (and `-PxbeImage=<default.xbe>`).
+3. Install `android/app/build/outputs/apk/release/app-release.apk` and copy or import the game.
+
+### Updating without uninstalling
+
+Every build — CI's and a PC's — is signed with the same key, `android/keystore/shadow.keystore`, and the workflow
+gives each build a higher version code (the run number), so a new APK installs straight over the last one and keeps the
+game files, saves and settings. The key is in the repository on purpose: it is a sideload identity, not a store one,
+and keeping it the same is what makes updates work. To sign with a key of your own instead, set `SHADOW_KEYSTORE` (a
+keystore path) and `SHADOW_KEYSTORE_PASSWORD`, `SHADOW_KEY_ALIAS`, `SHADOW_KEY_PASSWORD`; every build after that switch
+needs one last uninstall, and then updates work again.
+
+Builds made before this (signed with a throwaway debug key) cannot be updated over — one last uninstall of those.
+
+### Building it on GitHub's runners
+
+`.github/workflows/android.yml` builds the APK without a PC set up for it. Every push that touches `android/`,
+`native/`, `src/` or `sdk/` runs it, and it can also be run by hand (*Actions → Android APK → Run workflow*).
+
+* **Without the game** it builds a *shell* APK: `tools/android/make_stub_game.py` writes a stand-in for
+  `generated/game`, so the toolchain, the SDK's runtime, the renderer, ImGui and the Java side all get compiled and
+  linked. The APK installs and starts, and stops at "the game is not here" — it proves the port builds, not that it
+  plays.
+* **With the game** give the run `iso_url`, a direct link to your own disc image (or set the repository variable
+  `SHADOW_ISO_URL`). The runner downloads it, reads `default.xbe` out of it with `tools/host/xiso.py`, builds the SDK's
+  recompiler on Linux (`tools/android/xbe_recomp`, no Windows needed), recompiles the game, builds, and keeps the APK
+  as an artifact for seven days. The image itself is deleted with the runner and never cached or committed.
+
+The APK comes back under the run's *Artifacts*. A failed build leaves a check run named `ci-report` holding the
+compiler's errors, which is the quickest place to read why.
+
+## What needs the game recompiled
+
+The port's Android host is in the APK, but the game's own fixes — cutscenes at 60 FPS and skippable on the first
+playthrough, true widescreen, the frame pacing, the CPU lock — are hooks the recompiler plants in the recompiled
+code, and they come from `config/game.toml`. Recompiling the game (step 1 above) applies them; building only the APK
+does not. A hook that does not fit an instruction is reported by the recompiler by name and address, and the build
+stops, so a wrong one never ships silently.
+
+## The project's files
+
+| File | What it is |
+| --- | --- |
+| `CMakeLists.txt` | libmain.so: the SDK's portable runtime (minus its Windows parts), the recompiled code, `src/game/hooks.cpp`, `src/common/render_ext.cpp`, `src/common/pc_text.cpp`, every `native/*.cpp`, glslang for the shaders, and ImGui's Vulkan backend |
+| `app/build.gradle` | the APK: SDK 34, NDK 28.2, arm64 only, minSdk 29, SDL3 cloned and built as `libSDL3.so` |
+| `app/src/main/AndroidManifest.xml` | Vulkan 1.1 required, gamepad and vibration optional, all files access for the game folder |
+| `app/src/main/java/.../MainActivity.java` | SDL's activity: storage access and where the game goes, the loose-controller forwarding, quit to launcher, haptics |
+| `.../GameImporter.java` | copies a picked disc image into the app's own folder, checking for the Xbox volume descriptor first |
+| `.../NativeBridge.java` | the native calls the activity makes for the forwarded controller |
+
+The port's own side (`native/`, one folder up) is shared with nothing else: `main.cpp` is the Android entry point and
+event loop, `app.cpp` the settings/folders/pacing host, `vulkan.cpp` the renderer, `touch.cpp` the controls, `menu.cpp`
+the port menu, `audio.cpp` the SDL3 audio device, `input.cpp` the pads and `dynamic_resolution.cpp` the resolution
+scaling.
+
+## Known differences from the PC build
+
+* Texture replacement and texture dumping are off: a phone has neither the files nor the memory for it, and the
+  settings are not offered in the menu.
+* Point sprites are drawn one pixel wide (they are in the PC build's Vulkan path too, which this renderer comes from).
+* No system link yet: the SDK's networking is portable, but nothing has been tested over a phone's Wi-Fi.
+* No splash, no relaunch into another XBE (an Android app has no second executable).
+
+## Credits and licences
+
+The renderer, the SDK and the port's structure come from the **XboxXBE-Recomp / Recompiled** project (MIT), and the
+Vulkan backend, touch controls and Android host were adapted from **Rangga Casper's Black Android port** (MIT, © 2026
+Rangga Casper). Both notices are kept in `LICENSE` files beside their code. *Shadow the Hedgehog* is a trademark of
+SEGA; this project ships no SEGA code and no SEGA assets, and is not affiliated with SEGA.

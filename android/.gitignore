@@ -1,0 +1,8 @@
+# the Gradle and CMake output, and the sources the build fetches
+.gradle/
+build/
+app/.cxx/
+third_party/
+local.properties
+*.iml
+.idea/

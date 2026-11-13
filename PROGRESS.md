@@ -688,3 +688,38 @@ in-between frames.
   releases are xdelta patches per region; v1.2 final, 2024-07-01). Approach (user): we ship NONE of Reloaded's code or
   assets (like the texture pack): the port gains a mods folder; users drop in their own copy of Reloaded and turn it
   on themselves; we add the support and test it heavily. Credit the Reloaded team. Follow-up posted on #5 (planned for 2.0).
+
+---
+
+## Android port (started 2026-11-13)
+
+A second host for the same recompilation: arm64 Android, Vulkan 1.1 through SDL3. The PC build keeps its Windows host
+in `src/` and the SDK; the phone's host lives in `native/` and the Android project in `android/` (see `ANDROID.md`).
+No game code or game files are shipped; the app reads the player's disc image at runtime.
+
+Written so far, not yet built on a device (this session had no NDK, so everything was checked with
+`g++ -fsyntax-only` against the real headers of SDL3, ImGui, Vulkan-Headers, glslang, toml++, and the whole `native/`
+tree plus `src/game/hooks.cpp`, `src/common/render_ext.cpp`, `src/common/pc_text.cpp` links as one library with no
+duplicate or missing symbols of its own):
+
+- `native/host.h`, `options.cpp` (`port::` settings, `ResetDefaults`, version), `app.cpp` (settings file, folders,
+  pacing, display stubs, Android properties in the log), `game_files.cpp` (search order, own/card folders from Java,
+  disc images, SHA-1 check, waits for files instead of quitting), `game_info.cpp` (`app::kGame`), `main.cpp`
+  (entry point, SDL event loop, foreground, JNI glue for forwarded controllers), `input.cpp` (SDL pads + forwarded
+  virtual devices, rumble), `audio.cpp` (SDL audio stream, 48 kHz stereo float), `ui.cpp` (ImGui style, SDL3 IO,
+  Roboto fonts), `touch.cpp` (13 controls, 3 presets, `touch.toml`, layout editor), `dynamic_resolution.cpp`
+  (percent scaling from the frame time), `menu.cpp` (DISPLAY / GRAPHICS / CONTROLS / GAME / ABOUT, saved as changed,
+  starts the game's own pause with a START tap).
+- `native/vulkan.cpp`, adapted from the Black Android port to this SDK: `Backend`/`Context` shape, timeline semaphore,
+  render-pass fallback for Vulkan 1.1 drivers, pipeline cache on disk, dynamic resolution, ImGui overlay; reworked for
+  this SDK's newer shader constants (`rtshift` per render-target stage, fog modes, quad classification with
+  `QuadHlsl`), the widescreen 2D layer (`HudPiece` / `HudLayoutFrame` / `HudResult`, patched before submit), the HD
+  scene (512x512 targets made 25% larger) and its glow-target clear, and a plain stretch to the screen (no letterbox,
+  no screen filters: the menu's LINEAR / NEAREST is the swapchain sampler).
+- `android/`: Gradle 8.7 wrapper, AGP 8.5.2, SDK 34, NDK 28.2.13676358, `minSdk 29`, arm64 only, 16 KB page linking,
+  `libmain.so` from the SDK runtime (Windows parts filtered out), the recompiled code, `native/*.cpp`, glslang and
+  ImGui; `MainActivity` (all files access flow, where the game goes, importer, forwarded controllers, haptics, quit to
+  launcher), `GameImporter` (picked `.iso` copied as `.part`, Xbox volume descriptor checked), `NativeBridge`.
+
+Next: a first device build (JDK + SDK + NDK), then the visual checklist (widescreen HUD, glow, shadows, cutscenes,
+audio latency), then system link and a phone-friendly release (gradle `assembleRelease` with a keystore).

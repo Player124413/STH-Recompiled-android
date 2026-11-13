@@ -36,6 +36,8 @@ originals, which removes false matches such as dark effect textures.
 - Xbox, PlayStation and Switch controllers with hot plugging and rumble, plus keyboard.
 - An in-game settings menu, including quit to desktop.
 - Frame capture (F3) for bug reports.
+- **Android** (arm64, Vulkan 1.1): touch controls with a drag-in-place layout editor, controller support, dynamic
+  resolution, the same settings menu, and quit to launcher. See [ANDROID.md](ANDROID.md).
 
 ## Building
 
@@ -53,6 +55,8 @@ originals, which removes false matches such as dark effect textures.
 | `tools/installer/` | Setup.exe source |
 | `tools/release/` | release packaging, Linux scripts, texture pack map |
 | `tools/host/` | texture pack matching tools |
+| `native/` | the Android host: entry point, Vulkan renderer, touch controls, port menu, audio, input |
+| `android/` | the Android project (Gradle, activity, manifest, CMake) - see [ANDROID.md](ANDROID.md) |
 | `sdk/` | Xbox XBE Recomp SDK (MIT) |
 
 Shadow the Hedgehog is a trademark of SEGA. This project is not affiliated with SEGA.
