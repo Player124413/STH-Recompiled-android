@@ -47,7 +47,10 @@ Everything the PC build has, in a phone's shape:
   start.
 * **GPU sync**: timeline semaphores where the driver has them, fences where it does not, and on ARM Mali fences by
   default — the phone whose picture is right runs render passes *and* fences, so the port matches it on both counts.
-  GRAPHICS → GPU SYNC switches AUTOMATIC, TIMELINE and FENCES, taken at the next start.
+  GRAPHICS → GPU SYNC switches AUTOMATIC, TIMELINE and FENCES, taken at the next start. On that Mali driver the
+  timeline path was the bug behind a scene with no geometry in it: the "the GPU is past this" value came back wrong, the
+  CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
+  Fences fixed it, which is why they are what ARM Mali gets.
 * **Graphics report**: GRAPHICS REPORT on the menu's GRAPHICS page writes what the frames so far asked of the GPU into
   the log — draws, point and point-sprite draws, reads of a render target while drawing into it, wide taps, targets
   made, texture uploads, ring flushes, pipelines — with the device's own capabilities beside it (BC/ASTC/ETC2, point

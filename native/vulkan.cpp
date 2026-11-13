@@ -3346,8 +3346,8 @@ void VulkanBackend::Report(const char* why) {
         else tex_bytes += px * 4 * lv;
         if (tx.decode) tex_decoded++;
     }
-    LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU)", uint32_t(textures_.size()),
-         double(tex_bytes) / 1048576.0, tex_decoded);
+    LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU), render %u%%, draw scale %.3f",
+         uint32_t(textures_.size()), double(tex_bytes) / 1048576.0, tex_decoded, dynres::Percent(), scale_);
     LOGI("graphics: BC %d, ASTC %d, ETC2 %d, point size %.0f to %.0f, lod bias %.1f, depth %s, dynamic rendering %d, "
          "render scale %.3f, HD scene %d, texture filter %d, aniso %u",
          caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2,
@@ -3399,7 +3399,7 @@ void VulkanBackend::Present(const Surface& front) {
     }
     presents_++;
     presents_seen_.store(presents_);
-    if (presents_ == 10) Report("first frames");
+    if (presents_ == 10 || presents_ == 30) Report("first frames");
     else if (presents_ == 120 || presents_ == 600 || presents_ == 1800) Report("running");
     frame_++;
     Frame& next = CurrentFrame();
