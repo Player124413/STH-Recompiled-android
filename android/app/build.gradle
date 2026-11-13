@@ -19,7 +19,8 @@ preBuild.dependsOn "fetchSDL"
 android {
     namespace "com.sthrecompiled.shadow"
     compileSdk 34
-    ndkVersion "28.2.13676358"
+    // -PshadowNdk=<version>: a CI image's NDK, when it is not the one the port is developed against
+    ndkVersion project.hasProperty("shadowNdk") ? project.shadowNdk : "28.2.13676358"
 
     defaultConfig {
         applicationId "com.sthrecompiled.shadow"
@@ -73,7 +74,8 @@ android {
     externalNativeBuild {
         cmake {
             path "../CMakeLists.txt"
-            version "3.31.6"
+            // -PshadowCmake=<version>: the same for CMake
+            version project.hasProperty("shadowCmake") ? project.shadowCmake : "3.31.6"
         }
     }
 

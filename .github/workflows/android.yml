@@ -51,16 +51,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: SDK packages, NDK and CMake
+      # The runner image already carries the Android SDK and its licences: use that and add what it may lack, rather
+      # than reinstalling the SDK
+      - name: NDK and CMake
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
-            "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" > /dev/null
-          echo "NDK at $ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?no Android SDK on this runner}}"
+          echo "SDK at $SDK"
+          command -v sdkmanager > /dev/null || export PATH="$(ls -d "$SDK"/cmdline-tools/*/bin | head -1):$PATH"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" \
+            "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" > /tmp/sdk.log 2>&1 \
+            || { tail -20 /tmp/sdk.log; echo "::warning::pinned NDK/CMake not installable, using what the image has"; }
+          NDK=$( (ls "$SDK/ndk" 2>/dev/null | grep -x "${NDK_VERSION}") || ls "$SDK/ndk" 2>/dev/null | sort -V | tail -1)
+          CMAKE=$( (ls "$SDK/cmake" 2>/dev/null | grep -x "${CMAKE_VERSION}") || ls "$SDK/cmake" 2>/dev/null | sort -V | tail -1)
+          test -n "$NDK" -a -n "$CMAKE" || { echo "::error::no NDK or CMake in $SDK"; ls -l "$SDK"; exit 1; }
+          echo "NDK $NDK, CMake $CMAKE"
+          { echo "NDK \`$NDK\`, CMake \`$CMAKE\`, SDK \`${SDK##*/}\`"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "SHADOW_NDK=$NDK" >> "$GITHUB_ENV"
+          echo "SHADOW_CMAKE=$CMAKE" >> "$GITHUB_ENV"
 
       - name: Cache Gradle and SDL3
         uses: actions/cache@v4
@@ -121,7 +130,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug
+          ./gradlew --no-daemon --stacktrace assembleDebug \
+            -PshadowNdk="$SHADOW_NDK" -PshadowCmake="$SHADOW_CMAKE"
 
       - name: What was built
         run: |
@@ -142,3 +152,28 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
+
+  # A failed run's log lives on storage this sandbox cannot reach, so the failure is copied into this job's summary,
+  # which the API does return: one place to read what broke without opening the run
+  diagnose:
+    needs: apk
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: What broke
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          out=""
+          for jid in $(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+                             --jq '.jobs[] | select(.conclusion=="failure") | .id'); do
+            out+=$(gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" 2>/dev/null \
+                    | sed 's/^[^ ]* //' \
+                    | grep -Ei -B2 -A6 "error|fail|cannot|not found|no such|denied|undefined reference" \
+                    | tail -120) || true
+            out+=$'\n---\n'
+          done
+          # the summary is capped, so keep the tail: the first error is repeated there by CMake anyway
+          printf '```\n%s\n```\n' "${out: -28000}" >> "$GITHUB_STEP_SUMMARY"
