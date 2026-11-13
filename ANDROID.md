@@ -64,6 +64,23 @@ Gradle 8.7 through the wrapper), plus a phone or tablet with arm64 and Vulkan 1.
    recompiled tree somewhere else, pass `-PxbeGenerated=<dir>` (and `-PxbeImage=<default.xbe>`).
 3. Install `android/app/build/outputs/apk/debug/app-debug.apk` and copy or import the game.
 
+### Building it on GitHub's runners
+
+`.github/workflows/android.yml` builds the APK without a PC set up for it. Every push that touches `android/`,
+`native/`, `src/` or `sdk/` runs it, and it can also be run by hand (*Actions → Android APK → Run workflow*).
+
+* **Without the game** it builds a *shell* APK: `tools/android/make_stub_game.py` writes a stand-in for
+  `generated/game`, so the toolchain, the SDK's runtime, the renderer, ImGui and the Java side all get compiled and
+  linked. The APK installs and starts, and stops at "the game is not here" — it proves the port builds, not that it
+  plays.
+* **With the game** give the run `iso_url`, a direct link to your own disc image (or set the repository variable
+  `SHADOW_ISO_URL`). The runner downloads it, reads `default.xbe` out of it with `tools/host/xiso.py`, builds the SDK's
+  recompiler on Linux (`tools/android/xbe_recomp`, no Windows needed), recompiles the game, builds, and keeps the APK
+  as an artifact for seven days. The image itself is deleted with the runner and never cached or committed.
+
+The APK comes back under the run's *Artifacts*. A failed build leaves a check run named `ci-report` holding the
+compiler's errors, which is the quickest place to read why.
+
 ## The project's files
 
 | File | What it is |
