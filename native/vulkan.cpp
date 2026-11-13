@@ -1257,15 +1257,15 @@ bool VulkanBackend::PickDevice() {
                 dynamic_ = false;
                 LOGR("vulkan: render passes on ARM Mali (dynamic rendering is not trusted here)");
             }
-            // the 1.1 drivers' timeline extension lost the device on the first submit (Mali-G76): fences there, and
-            // ARM Mali gets fences too -- the phone whose picture is right runs render passes and fences, and this is
-            // the other half of matching it. GPU SYNC in the menu overrides
-            bool mali = props_.vendorID == 0x13B5;
+            // the 1.1 drivers' timeline extension lost the device on the first submit (Mali-G76), and on the Mali-G57
+            // the timeline path handed the CPU a "the GPU is past this" value too early: the vertex ring was refilled
+            // under the GPU and the frame came out as fog with no geometry in it at all. Fences gave that phone its
+            // scene back, so they are what AUTOMATIC means on every device -- a fence per submit is cheap next to a
+            // frame with no scene in it. TIMELINE on the menu's GRAPHICS page compares, at the next start.
             timeline_ok_ = api >= VK_API_VERSION_1_2;
-            if (port::g_timeline_semaphores == 0) timeline_ok_ = false;
-            if (timeline_ok_ && port::g_timeline_semaphores != 1 && mali) {
+            if (timeline_ok_ && port::g_timeline_semaphores != 1) {
                 timeline_ok_ = false;
-                LOGR("vulkan: fences on ARM Mali (the timeline path is not trusted here)");
+                LOGR("vulkan: fences for timeline semaphores (the timeline path is not trusted yet)");
             }
             if (!dynamic_) LOGR("vulkan: no dynamic rendering, using render passes");
             if (!timeline_ok_) LOGR("vulkan: Vulkan %u.%u, using fences for timeline semaphores",
@@ -3346,8 +3346,9 @@ void VulkanBackend::Report(const char* why) {
         else tex_bytes += px * 4 * lv;
         if (tx.decode) tex_decoded++;
     }
-    LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU), render %u%%, draw scale %.3f",
-         uint32_t(textures_.size()), double(tex_bytes) / 1048576.0, tex_decoded, dynres::Percent(), scale_);
+    LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU), render %u%%, draw scale %.3f, sync %s",
+         uint32_t(textures_.size()), double(tex_bytes) / 1048576.0, tex_decoded, dynres::Percent(), scale_,
+         timeline_ok_ ? "timeline semaphores" : "fences");
     LOGI("graphics: BC %d, ASTC %d, ETC2 %d, point size %.0f to %.0f, lod bias %.1f, depth %s, dynamic rendering %d, "
          "render scale %.3f, HD scene %d, texture filter %d, aniso %u",
          caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2,

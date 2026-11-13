@@ -250,7 +250,7 @@ const char* SyncName() {
     switch (port::g_timeline_semaphores) {
         case 1: return "TIMELINE";
         case 0: return "FENCES";
-        default: return "AUTOMATIC";
+        default: return "AUTOMATIC (FENCES)";
     }
 }
 
