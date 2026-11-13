@@ -76,7 +76,7 @@ final class GameImporter {
         bar.setMax(1000);
         bar.setIndeterminate(size <= 0);
         TextView text = new TextView(activity);
-        text.setText("Starting…");
+        text.setText(name + "\nStarting…");
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         int pad = Math.round(20 * activity.getResources().getDisplayMetrics().density);
@@ -85,7 +85,7 @@ final class GameImporter {
         box.addView(text);
         cancelled = false;
         AlertDialog progress = new AlertDialog.Builder(activity)
-                .setTitle("Importing " + name)
+                .setTitle("Importing Shadow the Hedgehog")
                 .setView(box)
                 .setCancelable(false)
                 .setNegativeButton("Cancel", (d, w) -> cancelled = true)
@@ -112,7 +112,7 @@ final class GameImporter {
                             if (copied - shown >= (16L << 20)) {
                                 shown = copied;
                                 long c = copied;
-                                main.post(() -> show(bar, text, c, size));
+                                main.post(() -> show(bar, text, name, c, size));
                             }
                         }
                         out.getFD().sync();
@@ -143,12 +143,12 @@ final class GameImporter {
         }, "GameImport").start();
     }
 
-    private static void show(ProgressBar bar, TextView text, long copied, long size) {
+    private static void show(ProgressBar bar, TextView text, String name, long copied, long size) {
         if (size > 0) {
             bar.setProgress((int) (copied * 1000 / size));
-            text.setText(String.format("%.2f of %.2f GB", copied / 1e9, size / 1e9));
+            text.setText(String.format("%s\n%.2f of %.2f GB", name, copied / 1e9, size / 1e9));
         } else {
-            text.setText(String.format("%.2f GB", copied / 1e9));
+            text.setText(String.format("%s\n%.2f GB", name, copied / 1e9));
         }
     }
 

@@ -118,6 +118,10 @@ void CopyLog() {
     if (!CallActivity("copyLog", "()V")) LOGW("app: this build's activity has no copyLog");
 }
 
+void ShowAbout() {
+    if (!CallActivity("showAbout", "()V")) LOGW("app: this build's activity has no showAbout");
+}
+
 void ShareLog() {
     LOGI("app: sharing the log");
     if (!CallActivity("shareLog", "()V")) LOGW("app: this build's activity has no shareLog");

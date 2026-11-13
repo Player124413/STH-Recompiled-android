@@ -31,6 +31,9 @@ Everything the PC build has, in a phone's shape:
   on-screen MENU button, Android's back gesture, or BACK + START on a pad. Changes are saved to `settings.toml` as they
   are made; the game's own pause comes up behind it (the menu taps START for the game).
 * **Quit to launcher** from the menu.
+* **Who made it**: an "About this port" dialog — the port's author, the Telegram channel and the Black Android port it
+  was modelled on, in English and in Russian, with buttons that open both links. It comes up once at the first launch
+  and stays a tap away on the menu's ABOUT page.
 * **The log in one tap**: `COPY LOG` on the menu's ABOUT page puts the last 3000 lines on the clipboard, `SEND LOG` hands
   them to any app; the launcher's "where the game goes" dialog has `COPY LOG` too, for when the game never starts.
 * Saves, settings, caches and logs beside the app's own files, so nothing needs a permission to write.

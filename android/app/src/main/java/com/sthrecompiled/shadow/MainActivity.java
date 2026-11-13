@@ -22,6 +22,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.libsdl.app.SDLActivity;
@@ -45,6 +47,7 @@ public class MainActivity extends SDLActivity {
     private AlertDialog dialog;   // the one up, at most one at a time
     private boolean notNow;       // the player turned the access down this run
     private boolean imported;     // a copy this run finished: the game looks for it by itself
+    private boolean importing;    // a copy is running: no other dialog may come over its progress
     private final GameImporter importer = new GameImporter(this);
 
     @Override
@@ -96,6 +99,10 @@ public class MainActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (!aboutSeen()) {
+            showAbout(true);
+            return;
+        }
         askForGame();
     }
 
@@ -140,6 +147,74 @@ public class MainActivity extends SDLActivity {
             v.vibrate(VibrationEffect.createOneShot(Math.max(1, ms), VibrationEffect.DEFAULT_AMPLITUDE));
         } catch (Exception e) {
             // a phone without control of its vibration motor: nothing to do
+        }
+    }
+
+    // ---- about the port
+    //
+    // Who made it and where it came from, in English and in Russian: once at the first launch, and from the menu's
+    // ABOUT page whenever it is wanted. Two buttons open the channel and the port it was modelled on.
+
+    private static final String TELEGRAM = "https://t.me/player1444ports";
+    private static final String BLACK_ANDROID = "https://github.com/RanggaCasper/Black-Android";
+    private static final String PREFS = "shadow";
+    private static final String SEEN_ABOUT = "about_seen";
+    private static final String ABOUT_EN =
+            "Shadow the Hedgehog for Android, ported by Player1444.\n"
+            + "Telegram channel: " + TELEGRAM + "\n\n"
+            + "Ported with Rangga Casper's Black Android port as the reference: " + BLACK_ANDROID + "\n\n"
+            + "No game files and no game code are in this app: it is built from your own disc image. Shadow the "
+            + "Hedgehog is a trademark of SEGA; this project is not affiliated with SEGA.";
+    private static final String ABOUT_RU =
+            "Shadow the Hedgehog для Android, порт сделал Player1444.\n"
+            + "Телеграм-канал: " + TELEGRAM + "\n\n"
+            + "За основу портирования взят порт Black for Android (Rangga Casper): " + BLACK_ANDROID + "\n\n"
+            + "В приложении нет ни файлов игры, ни её кода — сборка делается из вашего собственного образа диска. "
+            + "Shadow the Hedgehog — торговая марка SEGA; проект с SEGA не связан.";
+
+    private boolean aboutSeen() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(SEEN_ABOUT, false);
+    }
+
+    // from the port menu, on the game's thread
+    public void showAbout() {
+        showAbout(false);
+    }
+
+    // findGame: the game still has to be looked for once the dialog goes (the first launch), not while it is running
+    private void showAbout(boolean findGame) {
+        runOnUiThread(() -> {
+            if (isFinishing()) return;
+            if (dialog != null && dialog.isShowing()) dialog.dismiss();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(SEEN_ABOUT, true).apply();
+
+            TextView body = new TextView(this);
+            body.setText(ABOUT_EN + "\n\n---\n\n" + ABOUT_RU);
+            body.setTextIsSelectable(true);  // the links can be copied out
+            int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+            body.setPadding(pad, pad / 2, pad, 0);
+            ScrollView scroll = new ScrollView(this);
+            scroll.addView(body);
+
+            dialog = new AlertDialog.Builder(this)
+                    .setTitle("About this port  /  Об этом порте")
+                    .setView(scroll)
+                    .setPositiveButton("Telegram", (d, w) -> openUrl(TELEGRAM))
+                    .setNeutralButton("Black Android", (d, w) -> openUrl(BLACK_ANDROID))
+                    .setNegativeButton("Close", null)
+                    .setOnDismissListener(d -> {
+                        dialog = null;
+                        if (findGame) getWindow().getDecorView().postDelayed(this::askForGame, 120);
+                    })
+                    .show();
+        });
+    }
+
+    private void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            toast("No app can open " + url);
         }
     }
 
@@ -260,7 +335,9 @@ public class MainActivity extends SDLActivity {
     }
 
     private void askForGame() {
-        if (imported || (dialog != null && dialog.isShowing())) return;
+        // an import in progress owns the screen: its own dialog says what is happening, and the game may be looking at
+        // a half written image
+        if (importing || imported || (dialog != null && dialog.isShowing())) return;
         File own = getExternalFilesDir(null);
         if (own != null && hasGameAnywhere(new File(own, "assets"))) return;
         if (!hasStorageAccess()) {
@@ -371,7 +448,12 @@ public class MainActivity extends SDLActivity {
         File target = own != null ? new File(own, "assets") : null;
         if (target == null) return;
         target.mkdirs();
+        // the progress dialog comes up here, before Android gets round to onResume: without the flag the game search
+        // put its "where the game goes" dialog over it and the import only showed once that was closed
+        importing = true;
+        if (dialog != null && dialog.isShowing()) dialog.dismiss();
         importer.copy(uri, target, ok -> {
+            importing = false;
             if (ok) imported = true;
         });
     }
