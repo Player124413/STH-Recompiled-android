@@ -3333,6 +3333,21 @@ void VulkanBackend::Report(const char* why) {
          (unsigned long long)diag_sprites_, (unsigned long long)diag_feedback_, (unsigned long long)diag_wide_,
          (unsigned long long)diag_targets_, (unsigned long long)diag_uploads_, (unsigned long long)diag_flushes_,
          (unsigned long long)diag_pipes_);
+    // how much the textures in memory take: the CPU decode path keeps a DXT texture at four times its size, which is
+    // what a transcode to ASTC or ETC2 would win back on a phone without BC
+    uint64_t tex_bytes = 0;
+    uint32_t tex_decoded = 0;
+    for (const auto& [key, tx] : textures_) {
+        uint64_t px = uint64_t(std::max(tx.img.w, 1u)) * std::max(tx.img.h, 1u) * std::max(tx.img.d, 1u) *
+                      std::max(tx.img.layers, 1u);
+        uint32_t lv = std::max(tx.levels, 1u);
+        if (tx.fmt == VK_FORMAT_BC1_RGBA_UNORM_BLOCK) tex_bytes += px / 2 * lv;
+        else if (tx.fmt == VK_FORMAT_BC2_UNORM_BLOCK || tx.fmt == VK_FORMAT_BC3_UNORM_BLOCK) tex_bytes += px * lv;
+        else tex_bytes += px * 4 * lv;
+        if (tx.decode) tex_decoded++;
+    }
+    LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU)", uint32_t(textures_.size()),
+         double(tex_bytes) / 1048576.0, tex_decoded);
     LOGI("graphics: BC %d, ASTC %d, ETC2 %d, point size %.0f to %.0f, lod bias %.1f, depth %s, dynamic rendering %d, "
          "render scale %.3f, HD scene %d, texture filter %d, aniso %u",
          caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2,
