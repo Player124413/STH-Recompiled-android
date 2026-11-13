@@ -110,9 +110,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
-          cmake -S tools/android/xbe_recomp -B out/tools -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build out/tools --target xbe_recomp -j "$(nproc)"
-          ./out/tools/xbe_recomp config/game.toml --xdk sdk/xdk
+          { cmake -S tools/android/xbe_recomp -B out/tools -G Ninja -DCMAKE_BUILD_TYPE=Release &&
+            cmake --build out/tools --target xbe_recomp -j "$(nproc)" &&
+            ./out/tools/xbe_recomp config/game.toml --xdk sdk/xdk; } 2>&1 | tee /tmp/recomp.log
+          st=${PIPESTATUS[0]}
+          if [ $st -ne 0 ]; then python3 tools/android/ci_report.py /tmp/recomp.log; exit $st; fi
           ls generated/game | head
           test -f generated/game/x86_func_mapping.cpp
 
@@ -125,13 +127,18 @@ jobs:
 
       # ---- the APK
 
+      # Through a log file: a failure then comes back as annotations (tools/android/ci_report.py), which can be read
+      # without opening the run
       - name: Build the APK
         working-directory: android
         run: |
-          set -euo pipefail
+          set -uo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug \
-            -PshadowNdk="$SHADOW_NDK" -PshadowCmake="$SHADOW_CMAKE"
+          ./gradlew --no-daemon --stacktrace --console=plain assembleDebug \
+            -PshadowNdk="$SHADOW_NDK" -PshadowCmake="$SHADOW_CMAKE" 2>&1 | tee /tmp/build.log
+          st=${PIPESTATUS[0]}
+          if [ $st -ne 0 ]; then python3 ../tools/android/ci_report.py /tmp/build.log; fi
+          exit $st
 
       - name: What was built
         run: |
@@ -166,14 +173,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          out=""
           for jid in $(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
                              --jq '.jobs[] | select(.conclusion=="failure") | .id'); do
-            out+=$(gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" 2>/dev/null \
-                    | sed 's/^[^ ]* //' \
-                    | grep -Ei -B2 -A6 "error|fail|cannot|not found|no such|denied|undefined reference" \
-                    | tail -120) || true
-            out+=$'\n---\n'
+            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${jid}/logs" > "/tmp/job-$jid.log" 2>/dev/null || true
+            echo "job $jid: $(wc -c < "/tmp/job-$jid.log") bytes of log"
+            sed 's/^[^ ]* //' "/tmp/job-$jid.log" > "/tmp/job-$jid.txt"
+            python3 tools/android/ci_report.py "/tmp/job-$jid.txt" || true
           done
-          # the summary is capped, so keep the tail: the first error is repeated there by CMake anyway
-          printf '```\n%s\n```\n' "${out: -28000}" >> "$GITHUB_STEP_SUMMARY"
