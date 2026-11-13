@@ -38,6 +38,9 @@ jobs:
     name: ${{ (inputs.iso_url || vars.SHADOW_ISO_URL) && 'APK (with the game)' || 'APK (shell, no game)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    permissions:
+      contents: read
+      checks: write
     env:
       NDK_VERSION: 28.2.13676358
       CMAKE_VERSION: 3.31.6
@@ -139,6 +142,30 @@ jobs:
           st=${PIPESTATUS[0]}
           if [ $st -ne 0 ]; then python3 ../tools/android/ci_report.py /tmp/build.log; fi
           exit $st
+
+      - name: Report the failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          {
+            echo "NDK ${SHADOW_NDK:-?}, CMake ${SHADOW_CMAKE:-?}, $(java -version 2>&1 | head -1)"
+            for f in /tmp/sdk.log /tmp/recomp.log /tmp/build.log; do
+              [ -s "$f" ] && { echo; echo "== $f"; python3 tools/android/ci_report.py "$f" --plain; }
+            done
+          } > /tmp/digest.txt
+          tail -c 3000 /tmp/digest.txt
+          python3 tools/android/ci_report.py /tmp/build.log || true
+          python3 - "$GITHUB_SHA" > /tmp/checkrun.json <<'PY'
+          import json, sys
+          body = open("/tmp/digest.txt", errors="replace").read()[:60000] or "(nothing)"
+          print(json.dumps({"name": "ci-report", "head_sha": sys.argv[1], "status": "completed",
+                            "conclusion": "neutral",
+                            "output": {"title": "why the APK build failed", "summary": body}}))
+          PY
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" --input /tmp/checkrun.json > /dev/null \
+            && echo "report posted" || echo "::warning::could not post the report"
 
       - name: What was built
         run: |
