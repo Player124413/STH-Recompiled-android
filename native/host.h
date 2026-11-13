@@ -31,6 +31,8 @@ void SetGameActive(bool active);
 bool GameActive();
 // the app closes and the launcher comes back (the menu's EXIT TO LAUNCHER)
 void ExitToLauncher();
+void CopyLog();   // the log's tail onto the clipboard
+void ShareLog();  // the log's tail to another app
 // a short vibration, from the touch controls (the VIBRATION setting)
 void HapticTap(int ms);
 

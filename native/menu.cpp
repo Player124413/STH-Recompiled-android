@@ -333,6 +333,13 @@ void AboutPage() {
     ImGui::Dummy(ImVec2(0, 8));
     ImGui::TextWrapped("Shadow the Hedgehog is a trademark of SEGA. This project is not affiliated with SEGA.");
     ImGui::PopStyleColor();
+    Section("LOG");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
+    ImGui::TextWrapped("If something goes wrong, this run's log is one tap from the clipboard or from any app you can "
+                       "send it with - no need to dig it out of Android/data.");
+    ImGui::PopStyleColor();
+    if (ButtonRow("COPY LOG", IM_COL32(120, 200, 240, 255))) host::CopyLog();
+    if (ButtonRow("SEND LOG", IM_COL32(120, 200, 240, 255))) host::ShareLog();
     Section("HOW TO PLAY");
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.80f, 0.79f, 1.0f));
     ImGui::TextWrapped("Left stick walks, the right stick turns the camera, A jumps, B is the action button, X fires, "

@@ -2,6 +2,8 @@ package com.sthrecompiled.shadow;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -20,11 +22,15 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.widget.Toast;
 
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLControllerManager;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -135,6 +141,92 @@ public class MainActivity extends SDLActivity {
         } catch (Exception e) {
             // a phone without control of its vibration motor: nothing to do
         }
+    }
+
+    // ---- the log
+    //
+    // A report is worth nothing without the log, and finding it means walking into Android/data. The newest log's tail
+    // is a tap away instead: COPY LOG puts it on the clipboard, SEND LOG hands it to another app. Both are called from
+    // the game's thread (the port menu) and from the launcher's own dialog, so they hop to the UI thread themselves.
+
+    private static final int LOG_LINES = 3000;      // the tail that is taken
+    private static final int LOG_MAX_CHARS = 220000;  // a share may not outgrow a binder transaction
+
+    // the newest .log/.txt in logs/, beside the app's files (internal storage when the phone gave no external one)
+    private File newestLog() {
+        File best = null;
+        for (File base : new File[] {getExternalFilesDir(null), getFilesDir()}) {
+            if (base == null) continue;
+            File[] files = new File(base, "logs").listFiles();
+            if (files == null) continue;
+            for (File f : files) {
+                String n = f.getName().toLowerCase();
+                if (!f.isFile() || !(n.endsWith(".log") || n.endsWith(".txt"))) continue;
+                if (best == null || f.lastModified() > best.lastModified()) best = f;
+            }
+        }
+        return best;
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    private String logTail() {
+        File f = newestLog();
+        if (f == null) return "# no log yet: the game has not started on this phone";
+        ArrayDeque<String> tail = new ArrayDeque<>();
+        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+            for (String line; (line = r.readLine()) != null; ) {
+                tail.addLast(line);
+                if (tail.size() > LOG_LINES) tail.removeFirst();
+            }
+        } catch (Exception e) {
+            return "# could not read " + f.getName() + ": " + e.getMessage();
+        }
+        StringBuilder b = new StringBuilder();
+        b.append("# Shadow the Hedgehog ").append(versionName()).append(", ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(", Android ").append(Build.VERSION.RELEASE).append(" (API ")
+                .append(Build.VERSION.SDK_INT).append(")\n");
+        b.append("# the last ").append(tail.size()).append(" lines of ").append(f.getPath()).append('\n');
+        for (String line : tail) b.append(line).append('\n');
+        String text = b.toString();
+        return text.length() > LOG_MAX_CHARS ? text.substring(text.length() - LOG_MAX_CHARS) : text;
+    }
+
+    public void copyLog() {
+        runOnUiThread(() -> {
+            String text = logTail();
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null) {
+                toast("No clipboard on this phone");
+                return;
+            }
+            cm.setPrimaryClip(ClipData.newPlainText("Shadow log", text));
+            toast("Log copied: " + text.length() / 1024 + " KB");
+        });
+    }
+
+    public void shareLog() {
+        runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_SUBJECT, "Shadow the Hedgehog log");
+            i.putExtra(Intent.EXTRA_TEXT, logTail());
+            try {
+                startActivity(Intent.createChooser(i, "Send the log"));
+            } catch (Exception e) {
+                copyLog();  // no share sheet: the clipboard is still better than nothing
+            }
+        });
+    }
+
+    private void toast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
 
     // ---- where the game goes
@@ -255,8 +347,9 @@ public class MainActivity extends SDLActivity {
         File shared = new File(Environment.getExternalStorageDirectory(), SHARED);
         show("Where the game goes", "Put the game in\n\n" + shared.getPath()
                 + "\n\neither its files (default.xbe and the rest) or its disc image as one .iso file. A folder on an SD "
-                + "card at the same place works too.\n\nYou can also pick the disc image here and the app copies it.",
-                "Import a disc image", this::startImport, "Close", null);
+                + "card at the same place works too.\n\nYou can also pick the disc image here and the app copies it.\n\n"
+                + "If something went wrong, COPY LOG puts this run's log on the clipboard.",
+                "Import a disc image", this::startImport, "Copy log", this::copyLog, "Close", null);
     }
 
     private void startImport() {
@@ -291,9 +384,14 @@ public class MainActivity extends SDLActivity {
 
     private void show(String title, String text, String positive, Runnable onPositive, String negative,
                       Runnable onNegative) {
+        show(title, text, positive, onPositive, null, null, negative, onNegative);
+    }
+
+    private void show(String title, String text, String positive, Runnable onPositive, String neutral,
+                      Runnable onNeutral, String negative, Runnable onNegative) {
         if (isFinishing()) return;
         if (dialog != null && dialog.isShowing()) dialog.dismiss();
-        dialog = new AlertDialog.Builder(this)
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(text)
                 .setPositiveButton(positive, (d, w) -> {
@@ -301,7 +399,10 @@ public class MainActivity extends SDLActivity {
                 })
                 .setNegativeButton(negative, (d, w) -> {
                     if (onNegative != null) onNegative.run();
-                })
-                .show();
+                });
+        if (neutral != null) b.setNeutralButton(neutral, (d, w) -> {
+            if (onNeutral != null) onNeutral.run();
+        });
+        dialog = b.show();
     }
 }

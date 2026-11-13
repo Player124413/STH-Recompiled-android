@@ -112,6 +112,17 @@ void ExitToLauncher() {
     CallActivity("finishGame", "()V");
 }
 
+// the log, out of the app: the activity reads its tail and puts it on the clipboard, or hands it to another app
+void CopyLog() {
+    LOGI("app: copying the log");
+    if (!CallActivity("copyLog", "()V")) LOGW("app: this build's activity has no copyLog");
+}
+
+void ShareLog() {
+    LOGI("app: sharing the log");
+    if (!CallActivity("shareLog", "()V")) LOGW("app: this build's activity has no shareLog");
+}
+
 void HapticTap(int ms) {
     if (!port::g_vibration) return;
     static std::atomic<uint64_t> last{0};
