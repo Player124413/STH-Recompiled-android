@@ -887,6 +887,7 @@ public:
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
     void DumpFrame() { dump_left_ = 1; }
+    std::string Info() const;
     void Sync(uint32_t data, uint32_t size) override;
     void SyncLate(uint32_t data) override;
     bool DeliverLate(uint32_t data) override;
@@ -2600,6 +2601,46 @@ bool VulkanBackend::ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint
     return true;
 }
 
+// the same facts the report logs, as one block of text for the menu: a phone that draws the picture wrong can be
+// compared with one that draws it right from a single screenshot of ABOUT, without digging a log out of Android/data
+std::string VulkanBackend::Info() const {
+    uint64_t tex_bytes = 0;
+    uint32_t decoded = 0;
+    for (const auto& [key, tx] : textures_) {
+        uint64_t px = uint64_t(std::max(tx.img.w, 1u)) * std::max(tx.img.h, 1u) * std::max(tx.img.layers, 1u);
+        uint32_t lv = std::max(tx.levels, 1u);
+        if (tx.fmt == VK_FORMAT_BC1_RGBA_UNORM_BLOCK) tex_bytes += px / 2 * lv;
+        else if (tx.fmt == VK_FORMAT_BC2_UNORM_BLOCK || tx.fmt == VK_FORMAT_BC3_UNORM_BLOCK) tex_bytes += px * lv;
+        else tex_bytes += px * 4 * lv;
+        if (tx.decode) decoded++;
+    }
+    const char* fmt = swap_fmt_ == VK_FORMAT_R8G8B8A8_UNORM     ? "RGBA8"
+                      : swap_fmt_ == VK_FORMAT_B8G8R8A8_UNORM   ? "BGRA8"
+                      : swap_fmt_ == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? "RGB10A2"
+                      : swap_fmt_ == VK_FORMAT_R5G6B5_UNORM_PACK16 ? "RGB565"
+                                                                 : "other";
+    char b[1400];
+    std::snprintf(
+        b, sizeof(b),
+        "GPU: %s\nVulkan %u.%u.%u, driver %08X\n"
+        "sync: %s\ndynamic rendering: %s\n"
+        "depth: %s, BC %d, ASTC %d, ETC2 %d\n"
+        "draw scale: %.2f (%u%%%s), HD 3D world %s\n"
+        "swapchain: %ux%u %s\n"
+        "textures: %u live, %.1f MB, %u decoded by the CPU\n"
+        "draws %llu: %llu points, %llu point sprites, %llu target reads\n"
+        "%.0f fps",
+        props_.deviceName, VK_API_VERSION_MAJOR(props_.apiVersion), VK_API_VERSION_MINOR(props_.apiVersion),
+        VK_API_VERSION_PATCH(props_.apiVersion), props_.driverVersion, timeline_ok_ ? "timeline semaphores" : "fences",
+        dynamic_ ? "on" : "off (render passes)", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
+        caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2, scale_,
+        app::Get().render_percent, port::g_dynamic_res ? " dynamic" : "", shadow::g_hd_scene ? "on" : "off",
+        swap_extent_.width, swap_extent_.height, fmt, uint32_t(textures_.size()), double(tex_bytes) / 1048576.0,
+        decoded, (unsigned long long)diag_draws_, (unsigned long long)diag_points_,
+        (unsigned long long)diag_sprites_, (unsigned long long)diag_feedback_, fps_);
+    return b;
+}
+
 // the colour targets of the frame before this one, the largest first, into dumps/ beside the settings: a picture that
 // comes out wrong, pass by pass, instead of guessed at from a screenshot
 void VulkanBackend::DumpTargets() {
@@ -3570,9 +3611,12 @@ void DumpFrame() {
     if (g_vulkan) g_vulkan->DumpFrame();
 }
 
+std::string GraphicsInfo() { return g_vulkan ? g_vulkan->Info() : std::string("no renderer"); }
+
 }  // namespace gpu
 
 namespace host {
 void GraphicsReport() { gpu::GraphicsReport(); }
 void DumpFrame() { gpu::DumpFrame(); }
+std::string GraphicsInfo() { return gpu::GraphicsInfo(); }
 }  // namespace host

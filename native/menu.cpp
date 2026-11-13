@@ -366,6 +366,10 @@ void AboutPage() {
     ImGui::PopStyleColor();
     if (ButtonRow("CHECK FOR UPDATES", IM_COL32(200, 170, 90, 255))) host::CheckForUpdates();
     if (ButtonRow("ABOUT THIS PORT", IM_COL32(200, 170, 90, 255))) host::ShowAbout();
+    Section("THIS PHONE");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.70f, 1.0f));
+    ImGui::TextWrapped("%s", host::GraphicsInfo().c_str());
+    ImGui::PopStyleColor();
     Section("LOG");
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
     ImGui::TextWrapped("If something goes wrong, this run's log is one tap from the clipboard or from any app you can "

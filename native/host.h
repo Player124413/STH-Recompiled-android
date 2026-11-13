@@ -33,6 +33,7 @@ bool GameActive();
 void ExitToLauncher();
 void GraphicsReport();  // what the frames so far asked of the GPU, into the log
 void DumpFrame();       // the frame's render targets as PNG files under dumps/, for a picture that comes out wrong
+std::string GraphicsInfo();  // the same facts as the report, as text for the menu's ABOUT page
 void CheckForUpdates();  // the newest release on GitHub, with "update now" or "later"
 void ShowAbout();  // the port's credits, English and Russian
 void CopyLog();   // the log's tail onto the clipboard
