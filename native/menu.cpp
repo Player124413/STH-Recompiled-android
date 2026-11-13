@@ -246,6 +246,14 @@ const char* DynamicRenderingName() {
     }
 }
 
+const char* SyncName() {
+    switch (port::g_timeline_semaphores) {
+        case 1: return "TIMELINE";
+        case 0: return "FENCES";
+        default: return "AUTOMATIC";
+    }
+}
+
 void GraphicsPage() {
     Section("THE PORT");
     if (ToggleRow("HD 3D WORLD", port::g_hd_scene)) {
@@ -257,6 +265,11 @@ void GraphicsPage() {
         port::g_dynamic_rendering = (port::g_dynamic_rendering + 1) % 3;  // off -> on -> automatic -> off
         Save();
         LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
+    }
+    if (Row("GPU SYNC", SyncName(), IM_COL32(240, 120, 110, 255), true)) {
+        port::g_timeline_semaphores = (port::g_timeline_semaphores + 1) % 3;  // automatic -> timeline -> fences
+        Save();
+        LOGI("port: gpu sync %s, takes effect on the next start", SyncName());
     }
     if (ToggleRow("WIDESCREEN 16:9", g_widescreen)) {
         g_widescreen = !g_widescreen;

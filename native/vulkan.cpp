@@ -1257,10 +1257,19 @@ bool VulkanBackend::PickDevice() {
                 dynamic_ = false;
                 LOGR("vulkan: render passes on ARM Mali (dynamic rendering is not trusted here)");
             }
-            // the 1.1 drivers' timeline extension lost the device on the first submit (Mali-G76): fences there
+            // the 1.1 drivers' timeline extension lost the device on the first submit (Mali-G76): fences there, and
+            // ARM Mali gets fences too -- the phone whose picture is right runs render passes and fences, and this is
+            // the other half of matching it. GPU SYNC in the menu overrides
+            bool mali = props_.vendorID == 0x13B5;
             timeline_ok_ = api >= VK_API_VERSION_1_2;
+            if (port::g_timeline_semaphores == 0) timeline_ok_ = false;
+            if (timeline_ok_ && port::g_timeline_semaphores != 1 && mali) {
+                timeline_ok_ = false;
+                LOGR("vulkan: fences on ARM Mali (the timeline path is not trusted here)");
+            }
             if (!dynamic_) LOGR("vulkan: no dynamic rendering, using render passes");
-            if (!timeline_ok_) LOGR("vulkan: Vulkan 1.1, using fences for timeline semaphores");
+            if (!timeline_ok_) LOGR("vulkan: Vulkan %u.%u, using fences for timeline semaphores",
+                                    VK_API_VERSION_MAJOR(api), VK_API_VERSION_MINOR(api));
             return true;
         }
         LOGE("vulkan: %s has no graphics queue that can present", p.deviceName);

@@ -33,6 +33,7 @@ const app::GameInfo app::kGame = {
                 {"vibration", &port::g_vibration, nullptr},
                 {"texture_filter", nullptr, &port::g_texture_filter},
                 {"dynamic_rendering", nullptr, &port::g_dynamic_rendering},
+                {"timeline_semaphores", nullptr, &port::g_timeline_semaphores},
                 {"min_render_percent", nullptr, &port::g_min_percent},
                 {"camera_speed", nullptr, &port::g_camera_speed}},
     .load = port::Load,

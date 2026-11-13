@@ -66,6 +66,8 @@ extern uint32_t g_min_percent; // dynamic resolution's floor, percent of the scr
 extern uint32_t g_texture_filter;  // 0 linear, 1 point
 // 2 automatic (render passes on ARM Mali), 1 dynamic rendering, 0 render passes; read when the device is made
 extern uint32_t g_dynamic_rendering;
+// 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences; read when the device is made
+extern uint32_t g_timeline_semaphores;
 
 // touch controls
 extern bool g_touch_controls;
