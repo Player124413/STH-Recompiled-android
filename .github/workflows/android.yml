@@ -181,8 +181,9 @@ jobs:
             echo "APK: $(basename "$APK"), $(du -h "$APK" | cut -f1)"
             echo "built with: $([ -n "${ISO_URL}" ] && echo 'the game' || echo 'no game code (shell)')"
             unzip -l "$APK" | grep -E "\.so$|\.dex$" || true
-            APKSIGNER=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/apksigner | tail -1)
-            "$APKSIGNER" verify --print-certs "$APK" 2>&1 | grep -E "Signer #1 certificate (DN|SHA-256)" || true
+            APKSIGNER=$(ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}"/build-tools/*/apksigner 2>/dev/null | tail -1)
+            echo "signed by: $("$APKSIGNER" verify --print-certs "$APK" 2>&1 | sed -n 's/^Signer #1 certificate DN: //p')"
+            "$APKSIGNER" verify --min-sdk-version 29 --print-certs "$APK" 2>&1 | head -12
             for so in libmain.so libSDL3.so; do
               echo
               echo "$so:"

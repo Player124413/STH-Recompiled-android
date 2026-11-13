@@ -63,7 +63,7 @@ extern uint32_t g_texture_filter;  // 0 linear, 1 point
 // touch controls
 extern bool g_touch_controls;
 extern bool g_vibration;
-extern uint32_t g_camera_speed;  // percent, the right stick's deflection per touch travel
+extern uint32_t g_camera_speed;  // percent, how far a drag on the screen turns the camera
 
 void Load(const void* table);  // settings.toml, for what app::kGame.options does not hold
 void Save(void* table);
