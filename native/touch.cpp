@@ -132,6 +132,8 @@ struct Finger {
     int part = kNone;
     float x = 0, y = 0;    // normalized
     float ox = 0, oy = 0;  // where it came down: a floating stick's base
+    float travelled = 0;   // for the camera: how far it went before the dead zone was passed
+    bool dragging = false;
     bool active = false;
 };
 Finger g_fingers[10];
@@ -180,7 +182,8 @@ bool Hit(const Info& info, const ImVec2& at, const Place& place) {
         ImVec2 half = PillHalf(info, place.scale);
         return std::fabs(dx) <= half.x * 1.18f && std::fabs(dy) <= half.y * 1.40f;
     }
-    float r = info.kind == Kind::Stick ? Unit(info, place.scale) * 1.15f : Unit(info, place.scale) * 0.78f;
+    // the drawn ring is one unit across: the thumb's own size, not a hair smaller than the picture
+    float r = info.kind == Kind::Stick ? Unit(info, place.scale) * 1.15f : Unit(info, place.scale) * 1.05f;
     return dx * dx + dy * dy <= r * r;
 }
 
@@ -329,7 +332,12 @@ bool EditorTap(float nx, float ny) {
 
 // A floating stick's base is where the thumb landed: the layout's place until then, so the menu and the editor still
 // show a control in a place that makes sense.
-void HomeShowing() { g_shown[kMove] = g_layout[kMove]; }
+// What is drawn is what is saved: g_shown only leaves g_layout while a floating stick is under the thumb. Without this
+// a saved layout was loaded into g_layout but the buttons were still drawn at the preset's places (and could not be
+// grabbed where they were seen, because the hit test reads g_layout).
+void HomeShowing() {
+    for (int i = 0; i < kParts; i++) g_shown[i] = g_layout[i];
+}
 
 }  // namespace
 
@@ -442,7 +450,7 @@ void BeginEdit() {
     g_editing = true;
     host::SetGameActive(false);
     for (Finger& f : g_fingers) f = {};
-    HomeShowing();
+    HomeShowing();  // the editor starts from the layout that is saved, not from the preset it was born with
     LOGI("touch: editing the layout");
 }
 
@@ -452,6 +460,7 @@ void EndEdit() {
     host::SetGameActive(true);
     Save();
     for (Finger& f : g_fingers) f = {};
+    HomeShowing();
     LOGI("touch: layout saved");
 }
 
@@ -508,16 +517,29 @@ void FollowStick(Finger& f) {
     g_live.move_y = -dy / r;
 }
 
-// The camera: the finger's travel since the last frame becomes the right stick's deflection for one frame, so the
-// distance dragged is the angle turned, whatever the frame rate. A held-still finger turns nothing.
-constexpr float kDragFullStick = 0.085f;  // of the screen's height in one frame for full deflection
+// The camera. The finger's travel is turned into a speed, not into an angle of its own: a frame's deflection is the
+// travel since the last frame divided by the time since the last frame, so dragging a given distance turns the same
+// amount at 30 as at 60 FPS. Below kDragDeadPx the finger is only being put down (or rolled on the glass), which would
+// otherwise jolt the view on every tap.
+constexpr float kDragFullSpeed = 3.0f;   // screen heights per second for full deflection at 100%
+constexpr float kDragSmooth = 0.05f;     // seconds the deflection takes to follow the finger
+constexpr float kDragDeadPx = 9.0f;      // travel before the camera starts to turn
+constexpr float kStickDead = 0.12f;      // kept clear of the game's own dead zone
 
-void DragCamera(float from_x, float from_y, float to_x, float to_y) {
+float g_cam_x = 0, g_cam_y = 0;                 // what the pad is given, smoothed
+clock::time_point g_cam_time = clock::now();    // when that was last computed
+
+void DragCamera(Finger& f, float from_x, float from_y) {
     Pixels p = Screen();
-    float dx = (to_x - from_x) * p.w / p.h, dy = to_y - from_y;  // both in screen heights
-    if (dx == 0 && dy == 0) return;
-    g_live.drag_x.store(std::clamp(g_live.drag_x.load() + dx, -1.0f, 1.0f));
-    g_live.drag_y.store(std::clamp(g_live.drag_y.load() + dy, -1.0f, 1.0f));
+    float dx = (f.x - from_x) * p.w, dy = (f.y - from_y) * p.h;  // pixels
+    if (!f.dragging) {
+        f.travelled += std::sqrt(dx * dx + dy * dy);
+        if (f.travelled < kDragDeadPx) return;
+        f.dragging = true;
+        return;  // the travel that opened the dead zone does not turn anything
+    }
+    g_live.drag_x.store(std::clamp(g_live.drag_x.load() + dx / p.h, -1.0f, 1.0f));
+    g_live.drag_y.store(std::clamp(g_live.drag_y.load() + dy / p.h, -1.0f, 1.0f));
 }
 
 }  // namespace
@@ -581,7 +603,7 @@ bool OnEvent(const SDL_Event& e) {
             return true;
         }
         if (f.part == kMove) FollowStick(f);
-        else if (f.part == kCamera) DragCamera(was_x, was_y, f.x, f.y);
+        else if (f.part == kCamera) DragCamera(f, was_x, was_y);
     } else if (e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_CANCELED) {
         int slot = FindFinger(e.tfinger.fingerID);
         if (slot < 0) return false;
@@ -613,7 +635,13 @@ void Apply(int port, input::Pad& pad) {
     if (port != 0) return;  // the touch controls are the first controller's
     // taken every frame, so travel does not pile up into a jump while the menu or the editor is up
     float drag_x = g_live.drag_x.exchange(0), drag_y = g_live.drag_y.exchange(0);
-    if (!port::g_touch_controls || shadow::MenuOpen() || g_editing) return;
+    auto now = clock::now();
+    float dt = std::clamp(std::chrono::duration<float>(now - g_cam_time).count(), 1.0f / 240.0f, 1.0f / 15.0f);
+    g_cam_time = now;
+    if (!port::g_touch_controls || shadow::MenuOpen() || g_editing) {
+        g_cam_x = g_cam_y = 0;
+        return;
+    }
     // the console keeps a controller plugged into port 1; without this the game pauses as if it was pulled out
     pad.connected = true;
     float mx = g_live.move_x.load(), my = g_live.move_y.load();
@@ -621,12 +649,24 @@ void Apply(int port, input::Pad& pad) {
         pad.lx = int16_t(std::clamp(mx, -1.0f, 1.0f) * 32767.0f);
         pad.ly = int16_t(std::clamp(my, -1.0f, 1.0f) * 32767.0f);
     }
+    // how fast the finger is going, in screen heights per second, as a deflection; then eased in so a quick flick does
+    // not snap the view and a finger that stops is followed by a stop, not a wall
     float sens = float(port::g_camera_speed) / 100.0f;
-    float rx = std::clamp(drag_x / kDragFullStick * sens, -1.0f, 1.0f);
-    float ry = std::clamp(-drag_y / kDragFullStick * sens, -1.0f, 1.0f);
-    if (rx * rx + ry * ry > 0.0004f) {
-        pad.rx = int16_t(rx * 32767.0f);
-        pad.ry = int16_t(ry * 32767.0f);
+    float want_x = drag_x / dt / kDragFullSpeed * sens, want_y = -drag_y / dt / kDragFullSpeed * sens;
+    float follow = 1.0f - std::exp(-dt / kDragSmooth);
+    g_cam_x = std::clamp(g_cam_x + (std::clamp(want_x, -1.0f, 1.0f) - g_cam_x) * follow, -1.0f, 1.0f);
+    g_cam_y = std::clamp(g_cam_y + (std::clamp(want_y, -1.0f, 1.0f) - g_cam_y) * follow, -1.0f, 1.0f);
+    if (std::fabs(g_cam_x) < 0.002f) g_cam_x = 0;
+    if (std::fabs(g_cam_y) < 0.002f) g_cam_y = 0;
+    // under the game's own dead zone a slow drag would turn nothing at all: start just above it instead of at zero
+    auto past_dead_zone = [](float v) {
+        if (v == 0) return 0.0f;
+        return std::copysign(kStickDead + std::min(std::fabs(v), 1.0f) * (1.0f - kStickDead), v);
+    };
+    float rx = past_dead_zone(g_cam_x), ry = past_dead_zone(g_cam_y);
+    if (rx != 0 || ry != 0) {
+        pad.rx = int16_t(std::clamp(rx, -1.0f, 1.0f) * 32767.0f);
+        pad.ry = int16_t(std::clamp(ry, -1.0f, 1.0f) * 32767.0f);
     }
     auto press = [&](int part, int analog) {
         if (g_live.pressed[part].load()) pad.analog[analog] = 0xFF;

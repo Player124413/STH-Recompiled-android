@@ -19,7 +19,7 @@ uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the sc
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
 bool g_touch_controls = true;
 bool g_vibration = true;
-uint32_t g_camera_speed = 100;  // percent
+uint32_t g_camera_speed = 200;  // percent: how fast a drag turns the camera
 
 }  // namespace port
 
@@ -31,12 +31,20 @@ namespace port {
 
 const char* VersionName() { return SHADOW_ANDROID_VERSION; }
 
+// Bumped when a default changes in a way an old file should not keep.
+constexpr int64_t kPortVersion = 1;
+
 void Load(const void* table) {
-    (void)table;  // the scalars come through app::kGame.options; this is for what changes shape later
+    const auto* t = static_cast<const toml::table*>(table);  // the scalars come through app::kGame.options
+    int64_t version = t ? (*t)["port_version"].value_or(0) : 0;
+    if (version < 1) g_camera_speed = 200;  // the camera was too slow to steer with a thumb at the old 100%
     shadow::g_hd_scene = g_hd_scene;
+    LOGI("port: settings version %lld, camera speed %u%%", (long long)version, g_camera_speed);
 }
 
-void Save(void* table) { (void)table; }
+void Save(void* table) {
+    if (auto* t = static_cast<toml::table*>(table)) t->insert("port_version", kPortVersion);
+}
 
 void ResetDefaults() {
     app::Settings& s = app::Get();
@@ -50,7 +58,7 @@ void ResetDefaults() {
     g_texture_filter = 0;
     g_touch_controls = true;
     g_vibration = true;
-    g_camera_speed = 100;
+    g_camera_speed = 200;
     shadow::g_hd_scene = true;
     touch::SetFloatingStick(true);
     touch::SetScale(100);

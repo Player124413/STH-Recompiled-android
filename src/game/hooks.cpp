@@ -84,7 +84,24 @@ X86_HOST_API void ShadowMainLeave(X86Context& ctx, uint8_t* base) {
 X86_HOST_API void ShadowEventFrameRate(X86Context& ctx, uint8_t* base) {
     (void)ctx;
     kernel::GuestCpuRelease();  // the frame wait starts: the loader tasks may run
-    if (base[0x54D481]) *reinterpret_cast<uint32_t*>(base + 0x54DD40) = shadow::g_cutscene_60 ? 1u : 2u;
+    if (!base[0x54D481]) return;  // no event: the stage keeps its own 60
+    auto* periods = reinterpret_cast<uint32_t*>(base + 0x54DD40);
+    const uint32_t want = shadow::g_cutscene_60 ? 1u : 2u;
+    if (*periods == want) return;
+    LOGI("cutscene: %u periods per update -> %u (60 FPS %s)", *periods, want, shadow::g_cutscene_60 ? "on" : "off");
+    *periods = want;
+}
+
+// The same value written where the event start sets it (002291AA puts 2 there, i.e. 30 FPS, and saves the old one).
+// Clamped as it is written, so an event is at 60 from its first frame even before the stage loop's wait runs the hook
+// above; the event end puts the saved value back either way.
+X86_HOST_API void ShadowEventFrameRateStart(X86Context& ctx, uint8_t* base) {
+    (void)ctx;
+    if (!shadow::g_cutscene_60) return;
+    auto* periods = reinterpret_cast<uint32_t*>(base + 0x54DD40);
+    if (*periods != 2) return;  // only the event's own 30 FPS value is touched, whatever else that word holds
+    LOGI("cutscene: event start asked for 2 periods per update, using 1");
+    *periods = 1;
 }
 
 // The event scene player (event+0x180; set time 0022BDE0 -> 0022BBE0) seeks its scene to the event time cut to a

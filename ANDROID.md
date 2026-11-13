@@ -18,9 +18,12 @@ Everything the PC build has, in a phone's shape:
 * **Cutscene skip** and **cutscenes at 60 FPS**, as the PC build's hooks.
 * **Touch controls**: the console's own buttons and nothing else — A/B/X/Y in the Xbox diamond (Y above, X left,
   B right, A below), LT/RT, START and the port's MENU button, plus a move stick that is floating or fixed. **The
-  camera is the screen**: drag anywhere that is not a button and the view turns by how far the finger went, at the
-  speed set by CAMERA SPEED. Buttons can be resized, faded, moved with the layout editor, and three presets (Modern,
-  Compact, Split) give a starting point; the layout is `touch.toml` beside `settings.toml`.
+  camera is the screen**: drag anywhere that is not a button. The turn follows how fast the finger moves rather than
+  how far, so a drag turns the same amount at any frame rate; a few pixels of travel are ignored first, so tapping a
+  button never jolts the view, and the deflection is eased in and out instead of snapping. CAMERA SPEED (200% out of
+  the box, adjustable 50–400%) is the whole of it. Buttons can be resized, faded, moved with the layout editor, and
+  three presets (Modern, Compact, Split) give a starting point; the layout is `touch.toml` beside `settings.toml`, and
+  what is drawn is exactly what is saved.
 * **Controllers**: every pad SDL3 knows (Xbox, DualSense, Switch Pro, generic HID) plays as it does on the console,
   with rumble. Controllers Android hands the app as a "virtual device" SDL ignores still play: the activity forwards
   their keys and axes to port 0.
@@ -93,6 +96,14 @@ Builds made before this (signed with a throwaway debug key) cannot be updated ov
 
 The APK comes back under the run's *Artifacts*. A failed build leaves a check run named `ci-report` holding the
 compiler's errors, which is the quickest place to read why.
+
+## What needs the game recompiled
+
+The port's Android host is in the APK, but the game's own fixes — cutscenes at 60 FPS and skippable on the first
+playthrough, true widescreen, the frame pacing, the CPU lock — are hooks the recompiler plants in the recompiled
+code, and they come from `config/game.toml`. Recompiling the game (step 1 above) applies them; building only the APK
+does not. A hook that does not fit an instruction is reported by the recompiler by name and address, and the build
+stops, so a wrong one never ships silently.
 
 ## The project's files
 

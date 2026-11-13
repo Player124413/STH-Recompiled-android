@@ -287,9 +287,9 @@ void ControlsPage() {
                        "turns it.");
     ImGui::PopStyleColor();
     uint32_t camera = port::g_camera_speed;
-    step = RangeRow("CAMERA SPEED", camera, "%", 50, 200);
+    step = RangeRow("CAMERA SPEED", camera, "%", 50, 400);
     if (step) {
-        port::g_camera_speed = uint32_t(std::clamp<int>(int(camera) + step * 10, 50, 200));
+        port::g_camera_speed = uint32_t(std::clamp<int>(int(camera) + step * 25, 50, 400));
         Save();
     }
     if (ToggleRow("VIBRATION", port::g_vibration)) {
