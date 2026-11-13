@@ -109,3 +109,11 @@ target_link_libraries(main PRIVATE SDL3::SDL3 tomlplusplus::tomlplusplus glslang
                       vulkan android log)
 # 16 KB pages, as Android 15 devices may have
 target_link_options(main PRIVATE -Wl,-z,max-page-size=16384)
+if(SHADOW_STUB)
+    # the shell build has no game code, so the functions the SDK's XDK layer and the game's hooks call into the image
+    # (sub_002DD1C0 and the like) are not there to link against. Leave them unresolved instead of failing the link:
+    # libmain.so still loads, because nothing calls them, and the app stops at "the game is not here". A build with
+    # the game keeps the linker strict.
+    target_link_options(main PRIVATE -Wl,--unresolved-symbols=ignore-all)
+    message(STATUS "android: shell build, the game's functions are left unresolved")
+endif()
