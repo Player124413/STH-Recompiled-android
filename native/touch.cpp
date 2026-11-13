@@ -52,8 +52,8 @@ const ImU32 kGreen = IM_COL32(96, 190, 96, 255), kRed = IM_COL32(214, 74, 64, 25
 
 // the order is the draw order: sticks, buttons, then MENU
 const Info kInfo[kParts] = {
-    {kMove, "move", "MOVE", Kind::Stick, 0.30f, kSystem},
-    {kLook, "look", "CAMERA", Kind::Stick, 0.27f, kSystem},
+    {kMove, "move", "MOVE", Kind::Stick, 0.17f, kSystem},
+    {kLook, "look", "CAMERA", Kind::Stick, 0.145f, kSystem},
     {kA, "a", "A", Kind::Circle, 0.062f, kGreen},
     {kB, "b", "B", Kind::Circle, 0.052f, kRed},
     {kX, "x", "X", Kind::Circle, 0.052f, kBlue},
@@ -78,34 +78,35 @@ using Layout = std::array<Place, kParts>;
 
 // Three starting points. Fractions of the screen, y down.
 const Layout kModern = {{
-    {0.15f, 0.72f, 1.0f},    // move
-    {0.72f, 0.72f, 1.0f},    // look
-    {0.90f, 0.80f, 1.05f},   // A
-    {0.79f, 0.865f, 1.0f},   // B
-    {0.795f, 0.695f, 1.0f},  // X
-    {0.685f, 0.805f, 1.0f},  // Y
-    {0.945f, 0.585f, 1.0f},  // black
-    {0.665f, 0.625f, 1.0f},  // white
-    {0.055f, 0.115f, 1.0f},  // LT
-    {0.945f, 0.115f, 1.0f},  // RT
-    {0.945f, 0.265f, 1.0f},  // START
-    {0.055f, 0.265f, 1.0f},  // BACK
-    {0.055f, 0.055f, 1.0f},  // MENU
+    {0.16f, 0.72f, 1.0f},    // move
+    {0.82f, 0.78f, 1.0f},    // look
+    {0.95f, 0.565f, 1.05f},  // A
+    {0.86f, 0.565f, 1.0f},   // B
+    {0.95f, 0.43f, 1.0f},    // X
+    {0.86f, 0.43f, 1.0f},    // Y
+    {0.72f, 0.40f, 1.0f},    // black
+    {0.72f, 0.52f, 1.0f},    // white
+    {0.06f, 0.10f, 1.0f},    // LT
+    {0.94f, 0.10f, 1.0f},    // RT
+    {0.94f, 0.26f, 1.0f},    // START
+    {0.06f, 0.26f, 1.0f},    // BACK
+    {0.16f, 0.045f, 1.0f},   // MENU
 }};
 
+// the same arrangement smaller and lower, for thumbs that want the screen's middle left alone
 const Layout kCompact = {{
-    {0.13f, 0.76f, 0.95f},  {0.70f, 0.76f, 0.95f}, {0.88f, 0.84f, 1.0f},  {0.78f, 0.895f, 0.95f},
-    {0.78f, 0.745f, 0.95f}, {0.68f, 0.845f, 0.95f}, {0.925f, 0.66f, 0.95f}, {0.665f, 0.70f, 0.95f},
-    {0.06f, 0.16f, 0.95f},  {0.94f, 0.16f, 0.95f},  {0.94f, 0.30f, 0.95f},  {0.06f, 0.30f, 0.95f},
-    {0.06f, 0.07f, 0.95f},
+    {0.15f, 0.75f, 0.90f},   {0.80f, 0.80f, 0.90f}, {0.95f, 0.60f, 1.0f},  {0.862f, 0.60f, 0.95f},
+    {0.95f, 0.47f, 0.95f},   {0.862f, 0.47f, 0.95f}, {0.72f, 0.44f, 0.95f}, {0.72f, 0.56f, 0.95f},
+    {0.06f, 0.12f, 0.95f},   {0.94f, 0.12f, 0.95f},  {0.94f, 0.27f, 0.95f}, {0.06f, 0.27f, 0.95f},
+    {0.16f, 0.055f, 0.95f},
 }};
 
-// buttons across the top, sticks at the bottom corners: the thumbs never cross
+// buttons across the top, sticks in the bottom corners: the thumbs never cross
 const Layout kSplit = {{
-    {0.14f, 0.78f, 1.0f},   {0.86f, 0.78f, 1.0f},  {0.935f, 0.20f, 1.0f}, {0.855f, 0.115f, 1.0f},
-    {0.935f, 0.365f, 1.0f}, {0.775f, 0.175f, 1.0f}, {0.635f, 0.115f, 1.0f}, {0.635f, 0.315f, 1.0f},
-    {0.055f, 0.105f, 1.0f}, {0.055f, 0.245f, 1.0f}, {0.945f, 0.80f, 1.0f}, {0.055f, 0.80f, 1.0f},
-    {0.055f, 0.055f, 0.95f},
+    {0.16f, 0.80f, 1.0f},    {0.84f, 0.80f, 1.0f},  {0.945f, 0.44f, 1.0f}, {0.855f, 0.30f, 1.0f},
+    {0.855f, 0.56f, 1.0f},   {0.76f, 0.44f, 1.0f},  {0.69f, 0.32f, 1.0f},  {0.69f, 0.55f, 1.0f},
+    {0.06f, 0.10f, 1.0f},    {0.94f, 0.10f, 1.0f},  {0.945f, 0.18f, 1.0f}, {0.06f, 0.25f, 1.0f},
+    {0.16f, 0.045f, 1.0f},
 }};
 
 const char* const kPresetIds[] = {"modern", "compact", "split"};
