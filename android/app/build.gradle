@@ -4,7 +4,7 @@ plugins {
 
 // SDL3, at the version the SDK's Windows build uses: its Java side goes into the APK, its C side into libSDL3.so
 def sdlDir = file("../third_party/SDL")
-def sdlTag = "release-3.2.10"
+def sdlTag = "release-3.4.16"  // the version the SDK's Windows build uses
 tasks.register("fetchSDL") {
     onlyIf { !new File(sdlDir, "CMakeLists.txt").exists() }
     doLast {

@@ -1144,6 +1144,7 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
     Begin();
     ui_ = InitUi();
     scale_ = app::RenderScale(guest_h_);
+    hd_applied_ = shadow::g_hd_scene;
     LOGI("vulkan: %ux%u guest, %ux%u screen, render scale %.3f", width, height, swap_extent_.width,
          swap_extent_.height, scale_);
     return true;
