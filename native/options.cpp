@@ -17,7 +17,7 @@ bool g_hd_scene = true;         // the HD scene target (shadow::g_hd_scene, src/
 bool g_dynamic_res = true;      // the render resolution follows the frame rate
 uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the screen's height
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
-uint32_t g_dynamic_rendering = 2;  // 2 automatic (render passes on ARM Mali), 1 dynamic rendering, 0 render passes
+uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic rendering, 2 automatic (Mali: passes)
 bool g_touch_controls = true;
 bool g_vibration = true;
 uint32_t g_camera_speed = 200;  // percent: how fast a drag turns the camera
@@ -33,12 +33,15 @@ namespace port {
 const char* VersionName() { return SHADOW_ANDROID_VERSION; }
 
 // Bumped when a default changes in a way an old file should not keep.
-constexpr int64_t kPortVersion = 1;
+constexpr int64_t kPortVersion = 2;
 
 void Load(const void* table) {
     const auto* t = static_cast<const toml::table*>(table);  // the scalars come through app::kGame.options
     int64_t version = t ? (*t)["port_version"].value_or(0) : 0;
     if (version < 1) g_camera_speed = 200;  // the camera was too slow to steer with a thumb at the old 100%
+    // render passes draw the scene's effects right where dynamic rendering did not (see the menu's DYNAMIC RENDERING);
+    // a file from the one build that wrote 2 for it gets the new default once
+    if (version < 2) g_dynamic_rendering = 0;
     shadow::g_hd_scene = g_hd_scene;
     LOGI("port: settings version %lld, camera speed %u%%", (long long)version, g_camera_speed);
 }
@@ -57,7 +60,7 @@ void ResetDefaults() {
     g_dynamic_res = true;
     g_min_percent = 40;
     g_texture_filter = 0;
-    g_dynamic_rendering = 2;
+    g_dynamic_rendering = 0;
     g_touch_controls = true;
     g_vibration = true;
     g_camera_speed = 200;

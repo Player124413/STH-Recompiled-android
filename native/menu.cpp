@@ -240,9 +240,9 @@ void DisplayPage() {
 
 const char* DynamicRenderingName() {
     switch (port::g_dynamic_rendering) {
-        case 0: return "OFF (RENDER PASSES)";
         case 1: return "ON";
-        default: return "AUTOMATIC";
+        case 2: return "AUTOMATIC";
+        default: return "OFF (RENDER PASSES)";
     }
 }
 
@@ -254,7 +254,7 @@ void GraphicsPage() {
         Save();
     }
     if (Row("DYNAMIC RENDERING", DynamicRenderingName(), IM_COL32(240, 120, 110, 255), true)) {
-        port::g_dynamic_rendering = (port::g_dynamic_rendering + 2) % 3;  // automatic -> on -> off -> automatic
+        port::g_dynamic_rendering = (port::g_dynamic_rendering + 1) % 3;  // off -> on -> automatic -> off
         Save();
         LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
     }
