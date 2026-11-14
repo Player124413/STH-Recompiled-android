@@ -57,6 +57,33 @@ bool StripNoperspective(std::string& s) {
     return lost;
 }
 
+// GL ES 3.00 cannot put a location on a fragment shader's inputs, so the two stages have to agree by name; SPIRV-Cross
+// names them by role instead ("i_d0" in, "_entryPointOutput_d0" out). Both sides are renamed to the same varyings here.
+void MatchVaryings(std::string& s, Stage stage) {
+    static const std::regex out_name(R"(\b_entryPointOutput_(\w+))");
+    static const std::regex in_name(R"(\bi_(\w+))");
+    if (stage == Stage::Pixel) {
+        s = std::regex_replace(s, in_name, "vary_$1");
+        return;
+    }
+    s = std::regex_replace(s, out_name, "vary_$1");
+    // a pixel shader may read a value its vertex shader never wrote (undefined on Vulkan too), and a driver will not
+    // link that: every value the game's vertex struct carries is declared here, whether this vertex shader writes it
+    static const char* kCarried[] = {"vec4 vary_d0;", "vec4 vary_d1;", "vec4 vary_b0;", "vec4 vary_b1;",
+                                     "vec4 vary_tc0;", "vec4 vary_tc1;", "vec4 vary_tc2;", "vec4 vary_tc3;",
+                                     "float vary_fogamt;"};
+    std::string add;
+    for (const char* name : kCarried) {
+        std::string decl = std::string("out ") + name;
+        std::string key = std::string(name).substr(std::string(name).find(' ') + 1);  // "vary_d0;"
+        if (s.find(key) == std::string::npos) add += decl + "\n";
+    }
+    if (add.empty()) return;
+    size_t version = s.find("#version");
+    size_t end = version == std::string::npos ? std::string::npos : s.find('\n', version);
+    s.insert(end == std::string::npos ? 0 : end + 1, add);
+}
+
 // GL ES has no default precision for float or int in a fragment shader, and HLSL carries none for SPIRV-Cross to copy:
 // without these two lines a phone's driver rejects every pixel shader outright
 void AddPrecision(std::string& s) {
@@ -139,6 +166,7 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
         return false;
     }
     StripBlockBindings(out);
+    MatchVaryings(out, stage);
     AddPrecision(out);
     if (stage == Stage::Vertex) RemapDepth(out);
     if (StripNoperspective(out)) LOGI("gl: %s: noperspective interpolation is not in GL ES 3.00, smoothed", entry);
