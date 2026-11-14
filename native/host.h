@@ -72,7 +72,6 @@ extern uint32_t g_dynamic_rendering;
 // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences; read when the device is made
 extern uint32_t g_timeline_semaphores;
 extern bool g_safe_graphics;
-extern bool g_wireframe;  // debug: every triangle drawn as its edges, which shows where a vertex went
 
 // touch controls
 extern bool g_touch_controls;

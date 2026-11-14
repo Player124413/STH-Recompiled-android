@@ -988,19 +988,6 @@ std::string PixelHlsl(const PixelKey& k) {
     return k.quad ? QuadHlsl(std::move(s)) : s;
 }
 
-// debug: one flat colour per material, never a dark one, so a shape the driver draws wrongly reads as a plain
-// sheet instead of a texture and can be told apart from its neighbours in a photo
-std::string FlatHlsl(const PixelKey& k) {
-    uint64_t h = 0xCBF29CE484222325ull;
-    const uint32_t parts[6] = {k.programmable, k.count, k.tex_modes, k.final_abcd, k.final_efg, k.alphakill};
-    for (uint32_t v : parts) h = (h ^ v) * 0x100000001B3ull;
-    for (int i = 0; i < 4; i++) h = (h ^ (uint32_t(k.tex[i].kind) | (uint32_t(k.ff[i][0]) << 8))) * 0x100000001B3ull;
-    auto ch = [&](int shift) { return 0.35f + 0.65f * float((h >> shift) & 0x7F) / 127.0f; };
-    std::string s = Common();
-    s += F("float4 main(VOut i) : SV_Target {\n    return float4(%.3f, %.3f, %.3f, 1);\n}\n", ch(0), ch(8), ch(16));
-    return k.quad ? QuadHlsl(std::move(s)) : s;
-}
-
 // the vertex shader hands on the pixel position as drawn and as pulled (e), the pixel shader takes the stretch back out
 std::string QuadHlsl(std::string s) {
     auto sub = [&](const char* at, const char* before, const char* after) {

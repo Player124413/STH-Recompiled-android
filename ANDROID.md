@@ -57,11 +57,6 @@ Everything the PC build has, in a phone's shape:
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame
   with no scene in it. TIMELINE is still there to compare, at the next start.
-* **Flat debug**: GRAPHICS → FLAT DEBUG (WIREFRAME) paints every material one plain colour, never a dark one, and on a
-  driver that offers `fillModeNonSolid` it also draws every triangle as its three edges. A model drawn smoothly but
-  wrongly and a model with one vertex gone look nothing alike: one is a dense mesh of flat colours in the wrong place,
-  the other is a fan of long triangles reaching across the screen. One photo of it says which. It is the only diagnostic
-  that needs nothing from the phone but the toggle and a photo.
 * **Shader caches are dropped when the shaders change**: the SPIR-V cache uses one file per module named after the
   build's shader hash *and* the SPIR-V version it was translated to, so a phone that has been updated across shader
   changes never runs an old module, and the driver's own pipeline cache (`shadercache/pipelines.bin`) is deleted when

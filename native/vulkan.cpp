@@ -632,7 +632,6 @@ constexpr uint64_t kPretransformedSalt = 0x5A5A;
 constexpr uint64_t kPointsSalt = 0x9017;
 constexpr uint64_t kPixelKeySalt = 0x9E3779B97F4A7C15ull;
 constexpr uint64_t kQuadSalt = 0xC3C30000;  // the QuadHlsl variant, apart from the plain shader
-constexpr uint64_t kFlatSalt = 0xD1B54A32D192ED03ull;  // the debug flat colour pixel shader, apart from the real one
 
 uint64_t VertexKey(const State& s, const Assembled& a, const DrawShaders& sh) {
     uint64_t seed = sh.prog ? s.vs->hash ^ a.regs : Hash(&s.vs_handle, 4, a.regs | kDeclarationSalt);
@@ -661,15 +660,12 @@ void KeyBlend(const State& s, PsoKey& k) {
     k.wmask = ((cw >> 16) & 1) | ((cw >> 8) & 1) << 1 | (cw & 1) << 2 | ((cw >> 24) & 1) << 3;
 }
 
-constexpr uint32_t kFillWireframeDebug = 0x40000000u;  // the menu's WIREFRAME, not the game's
-
 void KeyRasterizer(const State& s, const Assembled& a, PsoKey& k) {
     constexpr uint32_t kCullCw = 0x900;
     uint32_t cull = s.rs[kRsCullMode];
     k.cull = cull != 0 && a.topology == Topology::Triangles;
     k.ccw = cull == kCullCw;
-    // the debug wireframe rides in the fill mode's high bit, so it keys its own pipelines
-    k.fill = s.rs[kRsFillMode] | (port::g_wireframe ? kFillWireframeDebug : 0);
+    k.fill = s.rs[kRsFillMode];
 }
 
 constexpr float kAlphaTestAlways = 7.0f;
@@ -2227,9 +2223,8 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     vp.viewportCount = vp.scissorCount = 1;
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     constexpr uint32_t kFillWireframe = 0x1B01;
-    bool wire = (k.fill & kFillWireframeDebug) != 0 && feats_.fillModeNonSolid;
-    rs.polygonMode = (wire || k.fill == kFillWireframe) && feats_.fillModeNonSolid ? VK_POLYGON_MODE_LINE
-                                                                                  : VK_POLYGON_MODE_FILL;
+    rs.polygonMode = k.fill == kFillWireframe && feats_.fillModeNonSolid ? VK_POLYGON_MODE_LINE
+                                                                        : VK_POLYGON_MODE_FILL;
     rs.cullMode = k.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     rs.frontFace = k.ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     rs.depthBiasEnable = k.zbias != 0 || k.zslope != 0;
@@ -2759,16 +2754,13 @@ void VulkanBackend::EnsureVertexShader(const State& s, const Assembled& a, DrawS
 }
 
 void VulkanBackend::EnsurePixelShader(const PixelKey& pk, DrawShaders& sh) {
-    // the debug switch paints flat, and the module cache keeps the two apart
-    uint64_t key = sh.pkey ^ kPixelKeySalt ^ (port::g_wireframe ? kFlatSalt : 0);
-    if (auto it = shader_src_.find(key); it != shader_src_.end()) {
+    if (auto it = shader_src_.find(sh.pkey ^ kPixelKeySalt); it != shader_src_.end()) {
         sh.ph = it->second;
         sh.ps = modules_[sh.ph];
         return;
     }
-    sh.ps = port::g_wireframe ? Module(FlatHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph)
-                              : Module(PixelHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph);
-    shader_src_[key] = sh.ph;
+    sh.ps = Module(PixelHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph);
+    shader_src_[sh.pkey ^ kPixelKeySalt] = sh.ph;
 }
 
 constexpr float kUpscaledMin = 1.01f;

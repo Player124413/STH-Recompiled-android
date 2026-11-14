@@ -18,7 +18,6 @@ bool g_dynamic_res = true;      // the render resolution follows the frame rate
 uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the screen's height
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
 uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic rendering, 2 automatic (Mali: passes)
-bool g_wireframe = false;  // debug
 bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong
 uint32_t g_timeline_semaphores = 2;  // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences
 bool g_touch_controls = true;
@@ -69,7 +68,6 @@ void ResetDefaults() {
     g_dynamic_rendering = 0;
     g_timeline_semaphores = 2;
     g_safe_graphics = true;
-    g_wireframe = false;
     g_touch_controls = true;
     g_vibration = true;
     g_camera_speed = 200;

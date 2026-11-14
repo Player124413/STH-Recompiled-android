@@ -288,16 +288,6 @@ void GraphicsPage() {
                        "console's own size, the glow composite and the extra upscale taps are skipped, and DXT is "
                        "unpacked here instead of in the driver.");
     ImGui::PopStyleColor();
-    if (ToggleRow("FLAT DEBUG (WIREFRAME)", port::g_wireframe)) {
-        port::g_wireframe = !port::g_wireframe;
-        Save();
-        LOGI("port: debug colouring %s", port::g_wireframe ? "on" : "off");
-    }
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
-    ImGui::TextWrapped("FLAT DEBUG paints every material one plain colour and, where the driver can draw lines, its "
-                       "triangles as wireframe. It is not for playing: it is so one photo shows what the geometry "
-                       "really is.");
-    ImGui::PopStyleColor();
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {
         host::DumpFrame();  // the targets of the frame just drawn, then straight out through the share sheet
