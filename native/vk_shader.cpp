@@ -153,7 +153,9 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     sh.setSourceEntryPoint(entry);
     sh.setEnvInput(glslang::EShSourceHlsl, lang, glslang::EShClientVulkan, 100);
     sh.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
-    sh.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
+    // The oldest SPIR-V that Vulkan 1.1 takes. Nothing here needs anything newer, and a driver's front end has had the
+    // most years of testing on the 1.0 grammar -- which is the part of a phone's shader path the port cannot see into.
+    sh.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
     sh.setHlslIoMapping(true);
     sh.setAutoMapBindings(true);
     sh.setAutoMapLocations(true);
