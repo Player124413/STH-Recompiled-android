@@ -1000,7 +1000,7 @@ private:
     bool DepthCopy(const State& s);
     bool Shrink(Image& src, uint32_t w, uint32_t h, Image& down, uint32_t taps = 1);
     Image* CopySource(Target& t, Image& down);
-    bool ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint8_t>& out);
+    bool ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint8_t>& out, bool depth_aspect = false);
     void DumpTargets();
 
     // draws
@@ -2606,10 +2606,11 @@ Image* VulkanBackend::CopySource(Target& t, Image& down) {
 }
 
 // a copy source to the CPU, rows packed; waits for the GPU
-bool VulkanBackend::ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint8_t>& out) {
+bool VulkanBackend::ReadBack(Image& im, uint32_t w, uint32_t h, std::vector<uint8_t>& out, bool depth_aspect) {
     Buffer rb;
     if (!CreateBuffer(rb, VkDeviceSize(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) return false;
-    VkBufferImageCopy c{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {w, h, 1}};
+    VkImageAspectFlags aspect = depth_aspect ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    VkBufferImageCopy c{0, 0, 0, {aspect, 0, 0, 1}, {0, 0, 0}, {w, h, 1}};
     vkCmdCopyImageToBuffer(Cb(), im.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb.buf, 1, &c);
     VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -2669,7 +2670,7 @@ void VulkanBackend::DumpTargets() {
     std::filesystem::create_directories(dir, ec);
     std::vector<Target*> list;
     for (auto& [key, t] : targets_)
-        if (!t.depth && t.img && t.w >= 64 && t.h >= 64) list.push_back(&t);
+        if (t.img && t.w >= 64 && t.h >= 64) list.push_back(&t);
     std::sort(list.begin(), list.end(),
               [](const Target* a, const Target* b) { return size_t(a->w) * a->h > size_t(b->w) * b->h; });
     int n = 0;
@@ -2677,11 +2678,28 @@ void VulkanBackend::DumpTargets() {
         if (n == 8) break;
         std::vector<uint8_t> px;
         Transition(t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        if (!ReadBack(t->img, t->w, t->h, px)) continue;
-        for (size_t i = 0; i + 3 < px.size(); i += 4) std::swap(px[i], px[i + 2]);  // BGRA to RGBA
+        if (!ReadBack(t->img, t->w, t->h, px, t->depth)) continue;
+        if (t->depth) {
+            // grey, near is bright: the depth is where a vertex that went astray shows its shape
+            bool f32 = t->img.fmt == VK_FORMAT_D32_SFLOAT_S8_UINT || t->img.fmt == VK_FORMAT_D32_SFLOAT;
+            for (size_t i = 0; i + 3 < px.size(); i += 4) {
+                uint8_t g;
+                if (f32) {
+                    float z = 0;
+                    std::memcpy(&z, &px[i], 4);
+                    g = uint8_t(std::clamp(1.0f - z, 0.0f, 1.0f) * 255.0f);
+                } else {
+                    g = uint8_t(255 - px[i + 2]);  // W in the top byte of a 24 bit depth
+                }
+                px[i] = px[i + 1] = px[i + 2] = g;
+                px[i + 3] = 255;
+            }
+        } else {
+            for (size_t i = 0; i + 3 < px.size(); i += 4) std::swap(px[i], px[i + 2]);  // BGRA to RGBA
+        }
         char name[80];
-        std::snprintf(name, sizeof(name), "frame_%llu_%08X_%ux%u.png", (unsigned long long)presents_, t->data, t->w,
-                      t->h);
+        std::snprintf(name, sizeof(name), "frame_%llu_%08X_%ux%u%s.png", (unsigned long long)presents_, t->data, t->w,
+                      t->h, t->depth ? "_depth" : "");
         if (!WritePng(dir / name, t->w, t->h, px)) continue;
         LOGI("vulkan: dumped %s", name);
         n++;

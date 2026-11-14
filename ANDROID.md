@@ -57,7 +57,8 @@ Everything the PC build has, in a phone's shape:
   with no scene in it. TIMELINE is still there to compare, at the next start.
 * **Send a frame**: GRAPHICS → SEND A FRAME TO THE DEV writes the frame's render targets into `dumps/` beside the settings, the
   largest first and then hands them to the share sheet, so a picture that comes out wrong can be sent from the phone in
-  one tap and looked at pass by pass instead of guessed at from a screenshot.
+  one tap and looked at pass by pass instead of guessed at from a screenshot. The depth targets go with them as grey,
+  near bright, because a vertex that went astray shows its shape in the depth before anywhere else.
 * **DXT is always decoded by the port**, never by the GPU: no phone this port has run on can decode BC, so the driver's
   own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
   reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,
