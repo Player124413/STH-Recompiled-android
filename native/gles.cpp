@@ -207,6 +207,7 @@ class GlesBackend final : public Backend {
     bool Readback(Target& t, std::vector<uint8_t>& px);
     void SetSamplerState(const State& s, int stage, const DrawTextures& stages, GLuint tex);
     void RememberDrawn(Target* rt, Target* ds);
+    void Latch(Target& t);  // a target the CPU wrote since the GPU last drew it
     GLuint Feedback(GLuint tex, uint32_t w, uint32_t h);  // a copy of a target a draw reads while it writes it
 
     uint32_t guest_w_ = 0, guest_h_ = 0;
@@ -633,17 +634,7 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
         Target* as_target = FindTarget(data, fi.depth != 0);
         if (as_target) {
             // the pixels a stage shows are the GPU's when the game drew into them, and the guest's when it wrote them
-            if (!as_target->depth && DirtyEpoch(as_target->data) > as_target->epoch) {
-                uint64_t sig = MemSig(as_target->data, as_target->bytes);
-                as_target->epoch = DirtyEpoch(as_target->data);
-                if (sig != as_target->sig) {
-                    as_target->sig = sig;
-                    Surface su;
-                    su.header = s.textures[size_t(i)];
-                    su.data = as_target->data;
-                    UploadTarget(*as_target, su);
-                }
-            }
+            Latch(*as_target);
             tex = as_target->img.tex;
             if (!as_target->depth) {
                 stages.rt[i] = true;
@@ -698,6 +689,20 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLenum(Wrap(t[kTssAddressV])));
     }
     return true;
+}
+
+// the game wrote into the target's memory from the CPU since the GPU last drew it: the GPU's copy is the stale one
+void GlesBackend::Latch(Target& t) {
+    if (t.depth || !t.data) return;
+    uint64_t epoch = DirtyEpoch(t.data);
+    if (epoch <= t.epoch) return;
+    t.epoch = epoch;
+    uint64_t sig = MemSig(t.data, t.bytes);
+    if (sig == t.sig) return;
+    t.sig = sig;
+    Surface su;
+    su.data = t.data;
+    UploadTarget(t, su);
 }
 
 // a stage that names the target the draw writes into: GL leaves that read undefined, the Vulkan backend keeps a copy,
@@ -1010,6 +1015,7 @@ void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
     host::WaitForeground();
     Target* t = EnsureTarget(front, false);
+    if (t) Latch(*t);  // the frame may have been put together by the CPU, or copied there by the game
     int win_w = 0, win_h = 0;
     host::WindowPixels(win_w, win_h);
     if (win_w > 0 && win_h > 0) {
@@ -1017,13 +1023,30 @@ void GlesBackend::Present(const Surface& front) {
         window_h_ = uint32_t(win_h);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, GLsizei(std::max(window_w_, 1u)), GLsizei(std::max(window_h_, 1u)));
+    // the console's picture on the phone's screen: edge to edge when the game is widened for the wider screen, and its
+    // own 4:3 with black bars beside it when it is not, the same rule the Vulkan renderer's present pass keeps
+    float w = float(std::max(window_w_, 1u)), h = float(std::max(window_h_, 1u));
+    float vx = 0, vy = 0, vw = w, vh = h;
+    if (!shadow::g_widescreen && guest_w_ && guest_h_) {
+        float aspect = float(guest_w_) / float(guest_h_);
+        vw = h * aspect;
+        vh = h;
+        if (vw > w) {
+            vw = w;
+            vh = w / aspect;
+        }
+        vx = (w - vw) * 0.5f;
+        vy = (h - vh) * 0.5f;
+    }
+    glViewport(GLint(vx), GLint(vy), GLsizei(std::max(vw, 1.0f)), GLsizei(std::max(vh, 1.0f)));
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glDepthMask(GL_FALSE);
+    glColorMask(1, 1, 1, 1);  // the overlay draws with whatever the frame's last draw left, unless it is put back
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     if (t) {
