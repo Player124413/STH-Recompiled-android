@@ -238,6 +238,7 @@ class GlesBackend final : public Backend {
     uint32_t scratch_w_ = 0, scratch_h_ = 0;
     uint32_t draw_fbo_ = 0, draw_rt_tex_ = 0, draw_ds_tex_ = 0;
     SDL_GLContext ctx_ = nullptr;  // made on the thread the draws run on
+    bool start_failed_ = false;
     std::string renderer_ = "?";   // the driver's name, for the graphics report
     std::string problem_;          // the first thing that went wrong with a shader or the driver, shown on the screen
     uint32_t draws_ = 0;
@@ -268,6 +269,7 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
 bool GlesBackend::Ready() {
     SDL_Window* window = host::Window();
     if (!window) return false;
+    if (start_failed_) return false;  // the driver said no once: the log has why, and every frame need not ask again
     if (ctx_) {
         if (SDL_GL_GetCurrentContext() != ctx_ && !SDL_GL_MakeCurrent(window, ctx_)) {
             LOG_FIRST(4, "gl: the context does not follow to this thread: %s", SDL_GetError());
@@ -275,7 +277,9 @@ bool GlesBackend::Ready() {
         }
         return true;
     }
-    return Start(window);
+    if (Start(window)) return true;
+    start_failed_ = true;
+    return false;
 }
 
 bool GlesBackend::Start(SDL_Window* window) {
@@ -593,6 +597,9 @@ Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
         programs_built_++;
         if (vc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, vc, 0);
         if (dc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, dc, 1);
+        if (vc == GL_INVALID_INDEX || dc == GL_INVALID_INDEX)
+            LOG_FIRST(2, "gl: a program names its constant blocks differently (VC %s, DC %s)",
+                      vc == GL_INVALID_INDEX ? "missing" : "found", dc == GL_INVALID_INDEX ? "missing" : "found");
         for (const auto& list : {sampler_units_[vs], sampler_units_[ps]})
             for (const glsl::Sampler& s : list) {
                 GLint at = glGetUniformLocation(p.id, s.name.c_str());
