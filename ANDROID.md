@@ -45,6 +45,9 @@ Everything the PC build has, in a phone's shape:
   never had the choice and was always right). GRAPHICS → DYNAMIC RENDERING switches it: OFF (RENDER PASSES), ON, and
   AUTOMATIC, which picks render passes on ARM Mali and dynamic rendering elsewhere; the choice is taken at the next
   start.
+* **Vulkan level**: the port asks for Vulkan 1.1 and nothing more, unless DYNAMIC RENDERING = ON or GPU SYNC = TIMELINE
+  asks for it: the phone whose picture is right is a 1.1 device, and every 1.2/1.3 path has drawn a wrong frame on a
+  phone that reports 1.3.
 * **GPU sync**: timeline semaphores where the driver has them, fences where it does not, and on ARM Mali fences by
   default — the phone whose picture is right runs render passes *and* fences, so the port matches it on both counts.
   GRAPHICS → GPU SYNC switches AUTOMATIC, TIMELINE and FENCES, taken at the next start. On that Mali driver the

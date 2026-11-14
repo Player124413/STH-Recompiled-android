@@ -1039,6 +1039,7 @@ private:
     VkPhysicalDeviceProperties props_{};
     VkPhysicalDeviceFeatures feats_{};
     uint32_t api_ = VK_API_VERSION_1_1;
+    uint32_t asked_api_ = VK_API_VERSION_1_1;  // what the instance was made with: no newer path than this is taken
     uint32_t qfam_ = 0;
     VkDevice dev_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
@@ -1171,7 +1172,15 @@ bool VulkanBackend::CreateInstance() {
     VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     ai.pApplicationName = app::kGame.log;
     ai.pEngineName = "XboxXBE-Recomp";
-    ai.apiVersion = std::min<uint32_t>(loader, VK_API_VERSION_1_3);
+    // The port is a Vulkan 1.1 renderer, and asks for no more than that unless a setting says otherwise: the phone whose
+    // picture is right is a 1.1 device, while every path a 1.2 or 1.3 device opens -- dynamic rendering, timeline
+    // semaphores -- is one that has drawn a frame wrong on a phone that reports 1.3. Taking the newer version only when
+    // DYNAMIC RENDERING = ON or GPU SYNC = TIMELINE is what the file says keeps those paths reachable for a comparison.
+    bool newer = port::g_dynamic_rendering == 1 || port::g_timeline_semaphores == 1;
+    asked_api_ = newer ? std::min<uint32_t>(loader, VK_API_VERSION_1_3) : std::min<uint32_t>(loader, VK_API_VERSION_1_1);
+    ai.apiVersion = asked_api_;
+    if (!newer) LOGR("vulkan: asking for Vulkan %u.%u (the port's own level)", VK_API_VERSION_MAJOR(asked_api_),
+                     VK_API_VERSION_MINOR(asked_api_));
     VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo = &ai;
     ci.enabledExtensionCount = uint32_t(exts.size());
@@ -1226,7 +1235,7 @@ bool VulkanBackend::PickDevice() {
         vkEnumerateDeviceExtensionProperties(pd, nullptr, &en, nullptr);
         std::vector<VkExtensionProperties> ext(en);
         vkEnumerateDeviceExtensionProperties(pd, nullptr, &en, ext.data());
-        uint32_t api = std::min<uint32_t>(p.apiVersion, VK_API_VERSION_1_3);
+        uint32_t api = std::min<uint32_t>(p.apiVersion, asked_api_);
         bool swapchain = HasExtension(ext, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         bool dynamic = api >= VK_API_VERSION_1_3 || HasExtension(ext, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
         if (!swapchain) {
@@ -1249,7 +1258,8 @@ bool VulkanBackend::PickDevice() {
             auto want = [&](const char* name) {
                 if (HasExtension(ext, name)) dev_exts_.push_back(name);
             };
-            if (api < VK_API_VERSION_1_3) {
+            // the extensions a newer path needs are only asked for when the file asks for that path
+            if (api < VK_API_VERSION_1_3 && port::g_dynamic_rendering != 0) {
                 want(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
                 want(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
                 want(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
@@ -2633,7 +2643,7 @@ std::string VulkanBackend::Info() const {
     std::snprintf(
         b, sizeof(b),
         "GPU: %s\nVulkan %u.%u.%u, driver %08X\n"
-        "sync: %s\ndynamic rendering: %s\n"
+        "sync: %s, asked Vulkan %u.%u\ndynamic rendering: %s\n"
         "depth: %s, BC %d, ASTC %d, ETC2 %d\n"
         "draw scale: %.2f (%u%%%s), HD 3D world %s\n"
         "swapchain: %ux%u %s\n"
@@ -2642,7 +2652,7 @@ std::string VulkanBackend::Info() const {
         "%.0f fps",
         props_.deviceName, VK_API_VERSION_MAJOR(props_.apiVersion), VK_API_VERSION_MINOR(props_.apiVersion),
         VK_API_VERSION_PATCH(props_.apiVersion), props_.driverVersion, timeline_ok_ ? "timeline semaphores" : "fences",
-        dynamic_ ? "on" : "off (render passes)", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
+        VK_API_VERSION_MAJOR(asked_api_), VK_API_VERSION_MINOR(asked_api_), dynamic_ ? "on" : "off (render passes)", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
         caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2, scale_,
         app::Get().render_percent, port::g_dynamic_res ? " dynamic" : "", shadow::g_hd_scene ? "on" : "off",
         swap_extent_.width, swap_extent_.height, fmt, uint32_t(textures_.size()), double(tex_bytes) / 1048576.0,
