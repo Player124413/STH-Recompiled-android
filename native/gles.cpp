@@ -179,13 +179,17 @@ class GlesBackend final : public Backend {
     void Present(const Surface& front) override;
     void Sync(uint32_t data_va, uint32_t size) override;
     void SyncLate(uint32_t data_va) override { Sync(data_va, 0); }
-    void Flush() override { glFlush(); }
+    void Flush() override {
+        if (Ready()) glFlush();
+    }
     void SetGamma(const uint8_t* ramp) override;
 
     void Report(const char* what);
     const std::string& Name() const { return renderer_; }
 
   private:
+    bool Ready();  // the context on this thread, made on the first call that needs it
+    bool Start(SDL_Window* window);
     // resources
     Target* FindTarget(uint32_t data, bool depth);
     Target* EnsureTarget(const Surface& s, bool depth);
@@ -230,7 +234,8 @@ class GlesBackend final : public Backend {
     GLuint scratch_fbo_ = 0;
     uint32_t scratch_w_ = 0, scratch_h_ = 0;
     uint32_t draw_fbo_ = 0, draw_rt_tex_ = 0, draw_ds_tex_ = 0;
-    std::string renderer_ = "?";  // the driver's name, for the graphics report
+    SDL_GLContext ctx_ = nullptr;  // made on the thread the draws run on
+    std::string renderer_ = "?";   // the driver's name, for the graphics report
     uint64_t presents_ = 0;
     uint32_t drawn_targets_ = 0, uploaded_textures_ = 0, programs_built_ = 0;
 };
@@ -238,13 +243,33 @@ class GlesBackend final : public Backend {
 bool GlesBackend::Init(uint32_t width, uint32_t height) {
     guest_w_ = width;
     guest_h_ = height;
+    // the frame is drawn at the console's own size, not at a multiple of it: this renderer's targets then hold exactly
+    // the pixels the game's shaders ask for, and the present pass stretches the frame over the phone's screen by itself
+    scale_ = 1.0f;
+    // the console's vertices are read by the CPU and handed over as float4: one vertex layout, no driver format rules
+    g_raw_vertices = false;
+    // the port hands its commands to a render thread of its own, and a GL context belongs to the thread that made it:
+    // the context is made on whichever thread asks for it first, and every call from then on brings it along
+    LOGI("gl: %ux%u guest, the context is made where the draws are", width, height);
+    return true;
+}
+
+bool GlesBackend::Ready() {
     SDL_Window* window = host::Window();
-    if (!window) {
-        LOGE("gl: no window");
-        return false;
+    if (!window) return false;
+    if (ctx_) {
+        if (SDL_GL_GetCurrentContext() != ctx_ && !SDL_GL_MakeCurrent(window, ctx_)) {
+            LOGE("gl: the context does not follow to this thread: %s", SDL_GetError());
+            return false;
+        }
+        return true;
     }
-    SDL_GLContext ctx = SDL_GL_CreateContext(window);
-    if (!ctx) {
+    return Start(window);
+}
+
+bool GlesBackend::Start(SDL_Window* window) {
+    ctx_ = SDL_GL_CreateContext(window);
+    if (!ctx_) {
         LOGE("gl: no GL context: %s", SDL_GetError());
         return false;
     }
@@ -259,9 +284,6 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
         LOGE("gl: GL ES 3.0 is needed, this driver has %d.%d", major, minor);
         return false;
     }
-    // the frame is drawn at the console's own size, not at a multiple of it: this renderer's targets then hold exactly
-    // the pixels the game's shaders ask for, and the present pass stretches the frame over the phone's screen by itself
-    scale_ = 1.0f;
     int win_w = 0, win_h = 0;
     host::WindowPixels(win_w, win_h);
     window_w_ = uint32_t(std::max(win_w, 1));
@@ -320,9 +342,7 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
         LOGE("gl: the overlay does not start");
         return false;
     }
-    // the console's vertices are read by the CPU and handed over as float4: one vertex layout, no driver format rules
-    g_raw_vertices = false;
-    LOGI("gl: %ux%u guest, %ux%u window, render scale %.3f", width, height, window_w_, window_h_, scale_);
+    LOGI("gl: %ux%u window, ready", window_w_, window_h_);
     return true;
 }
 
@@ -718,6 +738,7 @@ GLuint GlesBackend::Feedback(GLuint tex, uint32_t w, uint32_t h) {
 
 void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
                         uint32_t stencil) {
+    if (!Ready()) return;
     Target* rt = s.rt.header ? EnsureTarget(s.rt, false) : nullptr;
     Target* ds = s.zs.header ? EnsureTarget(s.zs, true) : nullptr;
     if (!rt && !ds) return;
@@ -759,6 +780,7 @@ void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, ui
 }
 
 void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
+    if (!Ready()) return;
     Assembled& a = asm_;
     if (!Assemble(s, prim, start, count, indices, a)) return;
     Target* rt = EnsureTarget(s.rt, false);
@@ -940,6 +962,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
 }
 
 void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) {
+    if (!Ready()) return;
     Target* from = FindTarget(mem::VirtualFromPhysical(src.data), false);
     if (!from || !from->drawn) {
         // pixels the CPU made: the copy happens in memory, as the Vulkan backend does
@@ -984,6 +1007,7 @@ void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, u
 // ---- present and read-back
 
 void GlesBackend::Present(const Surface& front) {
+    if (!Ready()) return;
     host::WaitForeground();
     Target* t = EnsureTarget(front, false);
     int win_w = 0, win_h = 0;
@@ -1069,6 +1093,7 @@ bool GlesBackend::Readback(Target& t, std::vector<uint8_t>& px) {
 }
 
 void GlesBackend::Sync(uint32_t data, uint32_t) {
+    if (!Ready()) return;
     uint32_t va = mem::VirtualFromPhysical(data);
     Target* t = FindTarget(va, false);
     if (!t || !t->drawn) return;
