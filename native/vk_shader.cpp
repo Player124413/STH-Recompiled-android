@@ -160,8 +160,7 @@ void Init(const std::filesystem::path& cache_dir) {
     }
 }
 
-bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
-    if (Load(hash, spirv)) return true;
+bool BuildSpirv(const std::string& hlsl, const char* entry, Stage stage, std::vector<uint32_t>& spirv) {
     std::lock_guard lock(g_lock);
     EShLanguage lang = stage == Stage::Vertex ? EShLangVertex : EShLangFragment;
     std::string text = Adapt(hlsl);
@@ -198,7 +197,12 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     options.validate = false;
     spirv.clear();
     glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &options);
-    if (spirv.empty()) return false;
+    return !spirv.empty();
+}
+
+bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
+    if (Load(hash, spirv)) return true;
+    if (!BuildSpirv(hlsl, entry, stage, spirv)) return false;
     Store(hash, spirv);
     return true;
 }

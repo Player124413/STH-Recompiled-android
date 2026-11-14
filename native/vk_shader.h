@@ -21,5 +21,7 @@ void Init(const std::filesystem::path& cache_dir);
 uint32_t CacheVersion();
 // the SPIR-V of hlsl's entry point, named "main" in the module; false after logging why
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv);
+// the same translation without the cache on disk, for a renderer that takes the SPIR-V somewhere else (the GL ES one)
+bool BuildSpirv(const std::string& hlsl, const char* entry, Stage stage, std::vector<uint32_t>& spirv);
 
 }  // namespace vkshader

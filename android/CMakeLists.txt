@@ -78,7 +78,18 @@ include(FetchContent)
 FetchContent_Declare(glslang GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git GIT_TAG 16.0.0 GIT_SHALLOW TRUE)
 FetchContent_Declare(tomlplusplus GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
 FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui.git GIT_TAG v1.91.8 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(glslang tomlplusplus imgui)
+# the GL ES renderer takes the same SPIR-V the Vulkan one runs, and writes it out as GLSL ES 3.00
+set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_CPP OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_MSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_UTIL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_SKIP_INSTALL ON CACHE BOOL "" FORCE)
+FetchContent_Declare(spirv_cross GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git GIT_TAG vulkan-sdk-1.3.296.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(glslang tomlplusplus imgui spirv_cross)
 
 # the SDK's runtime but its Windows parts (D3D12, XAudio2, the texture dumper's WIC) and the host side this port
 # writes itself (native/app.cpp and friends stand in for app/)
@@ -89,14 +100,16 @@ list(FILTER RUNTIME_SOURCES EXCLUDE REGEX
 set(GAME_HOST_SOURCES ${GAME}/game/hooks.cpp ${GAME}/common/render_ext.cpp ${GAME}/common/pc_text.cpp)
 file(GLOB ANDROID_SOURCES CONFIGURE_DEPENDS ${NATIVE}/*.cpp)
 file(GLOB COMPAT_SOURCES CONFIGURE_DEPENDS ${NATIVE}/compat/*.cpp)
+# ImGui draws through whichever renderer the port chose, so both backends are in the APK
 set(IMGUI_SOURCES ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 
 add_library(main SHARED ${RUNTIME_SOURCES} ${GAME_HOST_SOURCES} ${ANDROID_SOURCES} ${COMPAT_SOURCES} ${GEN_SOURCES}
             ${IMGUI_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/image_sha1.cpp)
 # compat/ for the SDK's x86 header, the SDK harness's for the Winsock and DXGI names its portable runtime uses
 target_include_directories(main PRIVATE ${NATIVE}/compat ${SDK}/harness/compat ${NATIVE} ${GAME} ${SDK}/runtime ${GEN}
-                           ${CMAKE_CURRENT_BINARY_DIR} ${glslang_SOURCE_DIR})
+                           ${CMAKE_CURRENT_BINARY_DIR} ${glslang_SOURCE_DIR} ${spirv_cross_SOURCE_DIR})
 target_include_directories(main SYSTEM PRIVATE ${imgui_SOURCE_DIR})
 # x86 chars are signed, as the game's code and the runtime were written for
 target_compile_options(main PRIVATE -fno-strict-aliasing -fsigned-char)
@@ -105,8 +118,10 @@ set_source_files_properties(${HOST_SOURCES} PROPERTIES COMPILE_OPTIONS "-include
 set_source_files_properties(${GEN_SOURCES} PROPERTIES
     COMPILE_OPTIONS "-O2;-w;-fno-strict-aliasing;-fsigned-char")
 set_source_files_properties(${NATIVE}/vk_shader.cpp PROPERTIES COMPILE_DEFINITIONS ENABLE_HLSL)
+# ImGui's GL ES 3 backend, and the port's own GL ES renderer: GLES2/gl2.h and EGL from the NDK
+set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp PROPERTIES COMPILE_DEFINITIONS IMGUI_IMPL_OPENGL_ES3)
 target_link_libraries(main PRIVATE SDL3::SDL3 tomlplusplus::tomlplusplus glslang glslang-default-resource-limits
-                      vulkan android log)
+                      spirv-cross-glsl spirv-cross-core vulkan EGL GLESv3 android log)
 # 16 KB pages, as Android 15 devices may have
 target_link_options(main PRIVATE -Wl,-z,max-page-size=16384)
 if(SHADOW_STUB)
