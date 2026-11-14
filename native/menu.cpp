@@ -280,6 +280,7 @@ void GraphicsPage() {
         g_widescreen = !g_widescreen;
         ApplyWidescreen();
         Save();
+        LOGI("port: widescreen %s", g_widescreen ? "on, the picture fills the screen" : "off, the console's 4:3 with bars");
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
     ImGui::TextWrapped("SAFE GRAPHICS is the one to try first when the picture comes out wrong: the frame is drawn at the "

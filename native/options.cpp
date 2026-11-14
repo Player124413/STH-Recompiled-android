@@ -18,7 +18,7 @@ bool g_dynamic_res = true;      // the render resolution follows the frame rate
 uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the screen's height
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
 uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic rendering, 2 automatic (Mali: passes)
-bool g_safe_graphics = false;  // every workaround at once, for a phone whose picture comes out wrong
+bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong
 uint32_t g_timeline_semaphores = 2;  // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences
 bool g_touch_controls = true;
 bool g_vibration = true;
@@ -35,7 +35,7 @@ namespace port {
 const char* VersionName() { return SHADOW_ANDROID_VERSION; }
 
 // Bumped when a default changes in a way an old file should not keep.
-constexpr int64_t kPortVersion = 2;
+constexpr int64_t kPortVersion = 3;
 
 void Load(const void* table) {
     const auto* t = static_cast<const toml::table*>(table);  // the scalars come through app::kGame.options
@@ -44,6 +44,9 @@ void Load(const void* table) {
     // render passes draw the scene's effects right where dynamic rendering did not (see the menu's DYNAMIC RENDERING);
     // a file from the one build that wrote 2 for it gets the new default once
     if (version < 2) g_dynamic_rendering = 0;
+    // a phone that has never drawn this game before starts on the workarounds: a picture that comes out right on a weak
+    // driver is worth more than the few things safe graphics leaves out
+    if (version < 3) g_safe_graphics = true;
     shadow::g_hd_scene = g_hd_scene;
     LOGI("port: settings version %lld, camera speed %u%%", (long long)version, g_camera_speed);
 }
@@ -64,7 +67,7 @@ void ResetDefaults() {
     g_texture_filter = 0;
     g_dynamic_rendering = 0;
     g_timeline_semaphores = 2;
-    g_safe_graphics = false;
+    g_safe_graphics = true;
     g_touch_controls = true;
     g_vibration = true;
     g_camera_speed = 200;

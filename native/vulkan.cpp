@@ -3411,8 +3411,23 @@ void VulkanBackend::DrawFrame(Target* t, uint32_t index) {
     if (pipe) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         BindSet(set, cbuf.off, cbuf.off);
-        SetViewport(0, 0, w, h);
-        SetScissor(0, 0, int32_t(w), int32_t(h));
+        // the console's picture on the phone's screen: filled edge to edge when the game is widened for 16:9 and kept
+        // whole with black bars beside it when it is not, because OFF has to mean the console's own 4:3 and not the same
+        // stretch again without the wider camera
+        float vx = 0, vy = 0, vw = w, vh = h;
+        if (!shadow::g_widescreen && guest_w_ && guest_h_) {
+            float aspect = float(guest_w_) / float(guest_h_);
+            vw = h * aspect;
+            vh = h;
+            if (vw > w) {
+                vw = w;
+                vh = w / aspect;
+            }
+            vx = (w - vw) * 0.5f;
+            vy = (h - vh) * 0.5f;
+        }
+        SetViewport(vx, vy, vw, vh);
+        SetScissor(int32_t(vx), int32_t(vy), int32_t(vw), int32_t(vh));
         vkCmdDraw(cb, 3, 1, 0, 0);
     }
     RenderUi();

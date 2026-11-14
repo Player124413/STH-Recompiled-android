@@ -58,10 +58,12 @@ Everything the PC build has, in a phone's shape:
   own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
   reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,
   and a texture unpacked wrongly is what smears and checkerboards look like.
-* **Safe graphics**: one toggle on the GRAPHICS page for a phone whose picture comes out wrong, applied as it is
+* **Safe graphics**: on by default, and one toggle on the GRAPHICS page for a phone whose picture comes out wrong. Applied as it is
   pressed: the frame is drawn at the console's own size (no render resolution, no HD scene), the glow composite and the
   extra upscale taps are skipped, dynamic resolution stands still and DXT is unpacked here instead of in the driver. It
   is the first thing to try, and every one of those five also has a switch of its own to bisect it.
+* **Widescreen**: on means the picture fills the phone's screen with the game's camera widened for it; off means the
+  console's own 4:3, whole, with black bars beside it - not the same stretch again without the wider camera.
 * **This phone**: ABOUT prints the same facts the report logs - GPU, Vulkan version, driver, sync path, dynamic
   rendering, depth format, draw scale, swapchain, texture memory, draw counters - so one screenshot of that page compares
   two phones without a log file.

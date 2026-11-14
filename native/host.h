@@ -155,6 +155,7 @@ ImFont* UiFont();
 namespace shadow {
 void InitPcText();   // src/common/pc_text.cpp: PC wording for the save messages
 void ApplyWidescreen();  // src/game/hooks.cpp
+extern bool g_widescreen;
 }
 
 namespace port {
