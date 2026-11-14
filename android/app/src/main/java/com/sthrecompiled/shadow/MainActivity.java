@@ -310,6 +310,41 @@ public class MainActivity extends SDLActivity {
         });
     }
 
+    // the render targets the DUMP FRAME button wrote, to another app: the one thing that shows a broken picture from
+    // the inside, and one tap rather than a log to read
+    public void shareDumps() {
+        runOnUiThread(() -> {
+            File[] files = null;
+            for (File base : new File[] {getExternalFilesDir(null), getFilesDir()}) {
+                if (base == null) continue;
+                files = new File(base, "dumps").listFiles();
+                if (files != null && files.length > 0) break;
+            }
+            ArrayList<Uri> uris = new ArrayList<>();
+            if (files != null) {
+                for (File f : files) {
+                    if (!f.isFile() || !f.getName().toLowerCase().endsWith(".png")) continue;
+                    uris.add(new Uri.Builder().scheme("content").authority(getPackageName() + ".frames")
+                            .appendPath(f.getName()).build());
+                }
+            }
+            if (uris.isEmpty()) {
+                toast("No frame dumped yet");
+                return;
+            }
+            Intent i = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE);
+            i.setType("image/png");
+            if (uris.size() == 1) i.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+            else i.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivity(Intent.createChooser(i, "Send the frame"));
+            } catch (Exception e) {
+                toast("No app to send it with");
+            }
+        });
+    }
+
     private void toast(String text) {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }

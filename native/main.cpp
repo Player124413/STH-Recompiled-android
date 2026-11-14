@@ -126,6 +126,11 @@ void ShowAbout() {
     if (!CallActivity("showAbout", "()V")) LOGW("app: this build's activity has no showAbout");
 }
 
+void ShareFrameDump() {
+    LOGI("app: sharing the frame dump");
+    if (!CallActivity("shareDumps", "()V")) LOGW("app: this build's activity has no shareDumps");
+}
+
 void ShareLog() {
     LOGI("app: sharing the log");
     if (!CallActivity("shareLog", "()V")) LOGW("app: this build's activity has no shareLog");

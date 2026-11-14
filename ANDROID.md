@@ -52,8 +52,9 @@ Everything the PC build has, in a phone's shape:
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame
   with no scene in it. TIMELINE is still there to compare, at the next start.
-* **Dump frame**: GRAPHICS → DUMP FRAME AS PNG writes the frame's render targets into `dumps/` beside the settings, the
-  largest first, so a picture that comes out wrong can be looked at pass by pass instead of guessed at from a screenshot.
+* **Send a frame**: GRAPHICS → SEND A FRAME TO THE DEV writes the frame's render targets into `dumps/` beside the settings, the
+  largest first and then hands them to the share sheet, so a picture that comes out wrong can be sent from the phone in
+  one tap and looked at pass by pass instead of guessed at from a screenshot.
 * **DXT is always decoded by the port**, never by the GPU: no phone this port has run on can decode BC, so the driver's
   own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
   reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,

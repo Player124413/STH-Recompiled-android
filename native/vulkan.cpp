@@ -43,7 +43,7 @@ namespace {
 constexpr int kFrames = 3;
 constexpr VkDeviceSize kUploadSize = 32ull << 20;  // per frame: vertices, indices, constants, texture staging
 constexpr VkDeviceSize kUboRange = 3072;           // b0 and b1: 192 vertex constants, DrawConstants under it
-constexpr VkDeviceSize kUboAlign = 256;
+constexpr VkDeviceSize kUboAlign = 256;  // the floor; props_.limits.minUniformBufferOffsetAlignment wins if larger
 constexpr VkFormat kBgra = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr uint32_t kSetsPerPool = 1024;
 static_assert(sizeof(DrawConstants) <= kUboRange);
@@ -1053,6 +1053,7 @@ private:
     PFN_vkWaitSemaphoresKHR wait_semaphores_ = nullptr;
     PFN_vkGetSemaphoreCounterValueKHR counter_value_ = nullptr;
     bool dynamic_ = true;  // dynamic rendering; Vulkan 1.1 drivers (older Adrenos) only have render passes
+    VkDeviceSize ubo_align_ = kUboAlign;  // what the device asks of a uniform buffer offset, used for the ring
     bool timeline_ok_ = true;  // without it a fence per submit stands in for the timeline's values
     struct Pending {
         uint64_t value;
@@ -1312,6 +1313,10 @@ bool VulkanBackend::CreateDevice() {
     // otherwise be the only device running code nobody has looked at, and a texture unpacked wrongly is exactly what
     // smears, checkerboards and coloured fringes look like.
     bc_ = false;
+    // a driver is free to ask for a larger uniform buffer offset than the 256 the port used to assume; a ring built on a
+    // stricter alignment than the device's is read from the wrong place, which is a picture drawn from the wrong
+    // matrices and nothing else
+    ubo_align_ = std::max<VkDeviceSize>(kUboAlign, VkDeviceSize(props_.limits.minUniformBufferOffsetAlignment));
     VkPhysicalDeviceFeatures2 on{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, chain()};
     on.features = feats_;
     dr.dynamicRendering = VK_TRUE;
@@ -1703,7 +1708,7 @@ VulkanBackend::Alloc VulkanBackend::Upload(VkDeviceSize size, VkDeviceSize align
 }
 
 VulkanBackend::Alloc VulkanBackend::Constants(const void* data, size_t bytes) {
-    Alloc a = Upload(kUboRange, kUboAlign);
+    Alloc a = Upload(kUboRange, ubo_align_);
     std::memcpy(a.cpu, data, std::min<size_t>(bytes, kUboRange));
     return a;
 }
@@ -2672,6 +2677,7 @@ void VulkanBackend::DumpTargets() {
         n++;
     }
     LOGI("vulkan: frame %llu written out, %d targets into %s", (unsigned long long)presents_, n, dir.string().c_str());
+    if (n) host::ShareFrameDump();  // straight to a messenger: one tap, no log to copy
 }
 
 // ---- draws

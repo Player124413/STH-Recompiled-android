@@ -288,9 +288,9 @@ void GraphicsPage() {
                        "unpacked here instead of in the driver.");
     ImGui::PopStyleColor();
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
-    if (ButtonRow("DUMP FRAME AS PNG", IM_COL32(200, 170, 90, 255))) {
-        host::DumpFrame();
-        LOGI("port: the next frame is written out into dumps/");
+    if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {
+        host::DumpFrame();  // the targets of the frame just drawn, then straight out through the share sheet
+        LOGI("port: the next frame is written out into dumps/ and offered to a share sheet");
     }
     Section("CUTSCENES");
     if (ToggleRow("SKIP CUTSCENES", g_skip_cutscenes)) {

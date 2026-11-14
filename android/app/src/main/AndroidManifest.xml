@@ -54,5 +54,12 @@
             android:authorities="${applicationId}.updates"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <!-- the frames DUMP FRAME wrote, for the share sheet -->
+        <provider
+            android:name=".FrameFiles"
+            android:authorities="${applicationId}.frames"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
