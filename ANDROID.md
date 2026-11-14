@@ -191,6 +191,34 @@ scaling.
 * No system link yet: the SDK's networking is portable, but nothing has been tested over a phone's Wi-Fi.
 * No splash, no relaunch into another XBE (an Android app has no second executable).
 
+## A phone whose picture comes out deformed, and what other ports found
+
+One report stands out from every other: on a **Unisoc T6xx with a Mali-G57** (Vulkan 1.3.315, driver 0D801000) a
+character's model is drawn stretched into a long sheet, while every other kind of draw is right. The same APK on an
+Adreno 710 draws it correctly, the game files are byte-identical, and the deformation is already in the render target
+that was dumped from the phone -- so the port asked the GPU for the right thing and the GPU drew something else.
+
+Checked against the other Android ports built on the same SDK, so the work is not repeated:
+
+* **Black Android (Black-Continue)**: its MALI FIX row carries four things. The helper specialisation that keeps a
+  texture or sampler out of a function parameter (`Specialize` in `vk_shader.cpp`) is the real fix there and is already
+  in this port. Fences instead of timeline semaphores on Mali is also already here. "Glow passes dropped" is what SAFE
+  GRAPHICS already does. **"Full precision", their relaxed-precision strip, does not apply**: glslang emits no
+  `RelaxedPrecision` decoration for this port's shaders -- checked by compiling the port's own generated pixel and
+  vertex shaders with glslang 16.0.0 and the port's own flags, which gave zero such decorations in both. Their
+  optimizer flag cannot do anything either: glslang's optimizer is SPIRV-Tools, which is not linked in either port, so
+  modules come out byte-identical with it on and off (1786 and 2791 words, same call count).
+* **MarathonRecomp-Android**: the same class of report on the same silicon -- a Moto G04s (Unisoc T606, Mali-G57 MP1)
+  with "graphical glitching / stretched vertices", never resolved.
+* **mw2-android**: a Moto G35 (Mali-G57) whose "geometry is stretched into spikes".
+* **UnleashedRecomp-Android** (the port this one's Mali findings would come from) states its floor as Valhall G610 and
+  newer and says "older Mali generations cannot work"; the Black port's floor is Mali-G7x. A G57 is below both.
+* **A different driver is not an option on a stock phone**: PanVK is the Mesa driver for Mali, and it needs the upstream
+  panfrost or panthor kernel interface, which no retail Android phone ships; Turnip, the usual way out, is Adreno only.
+
+That leaves the vendor's shader compiler, and nothing in the port can be pointed at it from here. What a port *can* do
+is stop feeding it the construct it miscompiles -- which needs to be identified on a device that has it, not guessed at.
+
 ## Credits and licences
 
 The renderer, the SDK and the port's structure come from the **XboxXBE-Recomp / Recompiled** project (MIT), and the
