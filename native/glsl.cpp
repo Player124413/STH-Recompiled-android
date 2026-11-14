@@ -57,6 +57,15 @@ bool StripNoperspective(std::string& s) {
     return lost;
 }
 
+// GL ES has no default precision for float or int in a fragment shader, and HLSL carries none for SPIRV-Cross to copy:
+// without these two lines a phone's driver rejects every pixel shader outright
+void AddPrecision(std::string& s) {
+    if (s.find("precision highp float") != std::string::npos) return;
+    size_t version = s.find("#version");
+    size_t end = version == std::string::npos ? std::string::npos : s.find('\n', version);
+    s.insert(end == std::string::npos ? 0 : end + 1, "precision highp float;\nprecision highp int;\n");
+}
+
 // the console's depth leaves its shaders as [0,1] and GL's clip space wants [-1,1]: a gl_Position write is wrapped so z
 // becomes 2z - w, which is the same depth after the divide. Without it every clear, every depth test against the game's
 // own cleared depth and every shadow map comparison would be in another scale than the one the game wrote.
@@ -130,6 +139,7 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
         return false;
     }
     StripBlockBindings(out);
+    AddPrecision(out);
     if (stage == Stage::Vertex) RemapDepth(out);
     if (StripNoperspective(out)) LOGI("gl: %s: noperspective interpolation is not in GL ES 3.00, smoothed", entry);
     return true;

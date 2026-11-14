@@ -10,6 +10,7 @@
 #include <GLES3/gl3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -29,6 +30,7 @@
 #include "host.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
+#include "vk_shader.h"
 
 namespace {
 
@@ -188,7 +190,7 @@ class GlesBackend final : public Backend {
     const std::string& Name() const { return renderer_; }
 
   private:
-    bool Ready();  // the context on this thread, made on the first call that needs it
+    bool Ready();  // the context, made on the first call and brought to the thread that draws
     bool Start(SDL_Window* window);
     // resources
     Target* FindTarget(uint32_t data, bool depth);
@@ -237,6 +239,11 @@ class GlesBackend final : public Backend {
     uint32_t draw_fbo_ = 0, draw_rt_tex_ = 0, draw_ds_tex_ = 0;
     SDL_GLContext ctx_ = nullptr;  // made on the thread the draws run on
     std::string renderer_ = "?";   // the driver's name, for the graphics report
+    std::string problem_;          // the first thing that went wrong with a shader or the driver, shown on the screen
+    uint32_t draws_ = 0;
+    double fps_ = 0;
+    int fps_n_ = 0;
+    std::chrono::steady_clock::time_point fps_t_ = std::chrono::steady_clock::now();
     uint64_t presents_ = 0;
     uint32_t drawn_targets_ = 0, uploaded_textures_ = 0, programs_built_ = 0;
 };
@@ -251,6 +258,9 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
     g_raw_vertices = false;
     // the port hands its commands to a render thread of its own, and a GL context belongs to the thread that made it:
     // the context is made on whichever thread asks for it first, and every call from then on brings it along
+    vkshader::Init(app::ExeDir() / "shadercache");
+    // the port hands its commands to a render thread of its own, and an EGL context is current on one thread at a time:
+    // the context is made on the thread that first draws, and every call after it brings the context along
     LOGI("gl: %ux%u guest, the context is made where the draws are", width, height);
     return true;
 }
@@ -260,7 +270,7 @@ bool GlesBackend::Ready() {
     if (!window) return false;
     if (ctx_) {
         if (SDL_GL_GetCurrentContext() != ctx_ && !SDL_GL_MakeCurrent(window, ctx_)) {
-            LOGE("gl: the context does not follow to this thread: %s", SDL_GetError());
+            LOG_FIRST(4, "gl: the context does not follow to this thread: %s", SDL_GetError());
             return false;
         }
         return true;
@@ -521,7 +531,10 @@ void GlesBackend::UploadTexture(Tex& tx, const TextureDesc& d, const uint32_t* c
 // ---- shaders
 
 uint64_t GlesBackend::Module(const std::string& hlsl, glsl::Stage stage, const char* entry) {
-    uint64_t seed = Hash(entry, std::strlen(entry), stage == glsl::Stage::Vertex ? 1 : 2);
+    // the shader cache on disk is keyed by this hash and the Vulkan renderer's entries live in the same folder: the GL
+    // renderer's are tagged, so the two can never read each other's modules
+    constexpr uint64_t kGlVertexSalt = 0x9A6C2F31D4B75E01ull, kGlPixelSalt = 0x4C1E8B27A9D3F605ull;
+    uint64_t seed = Hash(entry, std::strlen(entry), stage == glsl::Stage::Vertex ? kGlVertexSalt : kGlPixelSalt);
     uint64_t hash = Hash(hlsl.data(), hlsl.size(), seed);
     if (modules_.count(hash)) return hash;
     std::string code;
@@ -538,6 +551,10 @@ uint64_t GlesBackend::Module(const std::string& hlsl, glsl::Stage stage, const c
         char log[2048] = {};
         glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
         LOGE("gl: %s %s does not compile: %s", stage == glsl::Stage::Vertex ? "vertex" : "pixel", entry, log);
+        if (problem_.empty()) {
+            problem_ = std::string(stage == glsl::Stage::Vertex ? "vertex" : "pixel") + " shader rejected: " + log;
+            if (problem_.size() > 220) problem_.resize(220);
+        }
         LOGE("%s", code.c_str());
         glDeleteShader(sh);
         return 0;
@@ -564,11 +581,16 @@ Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
         char log[2048] = {};
         glGetProgramInfoLog(p.id, sizeof(log), nullptr, log);
         LOGE("gl: link failed: %s", log);
+        if (problem_.empty()) {
+            problem_ = std::string("the two shaders do not link: ") + log;
+            if (problem_.size() > 220) problem_.resize(220);
+        }
         glDeleteProgram(p.id);
         p.id = 0;
     } else {
         // the constaNt blocks are bound by name: GL ES 3.00 has no layout(binding) for them
         GLuint vc = glGetUniformBlockIndex(p.id, "VC"), dc = glGetUniformBlockIndex(p.id, "DC");
+        programs_built_++;
         if (vc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, vc, 0);
         if (dc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, dc, 1);
         for (const auto& list : {sampler_units_[vs], sampler_units_[ps]})
@@ -786,6 +808,7 @@ void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, ui
 
 void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
     if (!Ready()) return;
+    draws_++;
     Assembled& a = asm_;
     if (!Assemble(s, prim, start, count, indices, a)) return;
     Target* rt = EnsureTarget(s.rt, false);
@@ -862,7 +885,25 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     for (uint32_t i = 0; i < regs; i++) {
         glEnableVertexAttribArray(locations[i]);
         glVertexAttribPointer(locations[i], 4, GL_FLOAT, GL_FALSE, GLsizei(stride),
-                              reinterpret_cast<const void*>(uintptr_t(offsets[i] + a.base_vertex * stride)));
+                              reinterpret_cast<const void*>(uintptr_t(offsets[i])));
+    }
+    // a draw that starts at the title's own first vertex has that vertex taken off its indices: GL ES has no base
+    // vertex offset, and a negative one in the attributes would be no offset at all
+    std::vector<uint32_t> rebased;
+    const void* index_data = a.index_src;
+    bool index16 = a.index16;
+    if (a.index_count && a.base_vertex) {
+        rebased.resize(a.index_count);
+        int32_t base = a.base_vertex;
+        if (a.index16) {
+            const uint16_t* src = static_cast<const uint16_t*>(a.index_src);
+            for (uint32_t i = 0; i < a.index_count; i++) rebased[i] = uint32_t(int32_t(src[i]) + base);
+        } else {
+            const uint32_t* src = static_cast<const uint32_t*>(a.index_src);
+            for (uint32_t i = 0; i < a.index_count; i++) rebased[i] = uint32_t(int32_t(src[i]) + base);
+        }
+        index_data = rebased.data();
+        index16 = false;
     }
     uint32_t drawn = a.index_count ? a.index_count : a.draw_count;
     GLenum mode = a.topology == Topology::Points ? GL_POINTS
@@ -951,14 +992,14 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
         glDisable(GL_CULL_FACE);
     }
     if (a.index_count) {
-        size_t ibytes = size_t(a.index_count) * (a.index16 ? 2 : 4);
+        size_t ibytes = size_t(a.index_count) * (index16 ? 2 : 4);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
         if (ibytes > ibo_size_) {
             ibo_size_ = std::max(ibytes, size_t(1) << 16);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibo_size_), nullptr, GL_DYNAMIC_DRAW);
         }
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), a.index_src);
-        glDrawElements(mode, GLsizei(drawn), a.index16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), index_data);
+        glDrawElements(mode, GLsizei(drawn), index16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
     } else {
         glDrawArrays(mode, 0, GLsizei(drawn));
     }
@@ -1014,6 +1055,14 @@ void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, u
 void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
     host::WaitForeground();
+    fps_n_++;
+    auto now = std::chrono::steady_clock::now();
+    double el = std::chrono::duration<double>(now - fps_t_).count();
+    if (el >= 0.5) {
+        fps_ = double(fps_n_) / el;
+        fps_n_ = 0;
+        fps_t_ = now;
+    }
     Target* t = EnsureTarget(front, false);
     if (t) Latch(*t);  // the frame may have been put together by the CPU, or copied there by the game
     int win_w = 0, win_h = 0;
@@ -1071,13 +1120,39 @@ void GlesBackend::Present(const Surface& front) {
         glBindVertexArray(vao_);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
+    // a driver error with no shader log to go with it is still worth showing: the frame may be made of nothing
+    if (problem_.empty()) {
+        GLenum e = glGetError();
+        if (e != GL_NO_ERROR) {
+            char text[64];
+            std::snprintf(text, sizeof(text), "GL error 0x%04X", e);
+            problem_ = text;
+        }
+    }
     {
         std::lock_guard lock(app::UiLock());
         ImGui_ImplOpenGL3_NewFrame();
         ui::NewFrame(float(window_w_), float(window_h_));
         ImGui::NewFrame();
-        if (app::kGame.ui) app::kGame.ui(0.0);
+        if (app::kGame.ui) app::kGame.ui(fps_);
         touch::Draw();
+        // a picture that is not there has one of two causes, and both of them are written down on the screen instead of
+        // in a log the player would have to find: a shader the driver rejected, or a frame nothing was drawn into
+        std::string banner = problem_;
+        if (banner.empty() && draws_ == 0 && presents_ > 60) banner = "no draw has reached the screen yet";
+        if (!banner.empty()) {
+            ImGui::SetNextWindowPos(ImVec2(12, 96), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.75f);
+            ImGui::Begin("gl-diagnostic", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                             ImGuiWindowFlags_NoFocusOnAppearing);
+            ImGui::TextUnformatted("GL ES RENDERER");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.45f, 1.0f));
+            ImGui::TextWrapped("%s", banner.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Text("%llu frames, %u draws, %u programs", (unsigned long long)presents_, draws_, programs_built_);
+            ImGui::End();
+        }
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
