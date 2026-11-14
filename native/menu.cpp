@@ -288,6 +288,11 @@ void GraphicsPage() {
                        "console's own size, the glow composite and the extra upscale taps are skipped, and DXT is "
                        "unpacked here instead of in the driver.");
     ImGui::PopStyleColor();
+    if (ToggleRow("WIREFRAME (DEBUG)", port::g_wireframe)) {
+        port::g_wireframe = !port::g_wireframe;
+        Save();
+        LOGI("port: wireframe %s", port::g_wireframe ? "on" : "off");
+    }
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {
         host::DumpFrame();  // the targets of the frame just drawn, then straight out through the share sheet

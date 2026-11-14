@@ -660,12 +660,15 @@ void KeyBlend(const State& s, PsoKey& k) {
     k.wmask = ((cw >> 16) & 1) | ((cw >> 8) & 1) << 1 | (cw & 1) << 2 | ((cw >> 24) & 1) << 3;
 }
 
+constexpr uint32_t kFillWireframeDebug = 0x40000000u;  // the menu's WIREFRAME, not the game's
+
 void KeyRasterizer(const State& s, const Assembled& a, PsoKey& k) {
     constexpr uint32_t kCullCw = 0x900;
     uint32_t cull = s.rs[kRsCullMode];
     k.cull = cull != 0 && a.topology == Topology::Triangles;
     k.ccw = cull == kCullCw;
-    k.fill = s.rs[kRsFillMode];
+    // the debug wireframe rides in the fill mode's high bit, so it keys its own pipelines
+    k.fill = s.rs[kRsFillMode] | (port::g_wireframe ? kFillWireframeDebug : 0);
 }
 
 constexpr float kAlphaTestAlways = 7.0f;
@@ -2208,7 +2211,9 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     vp.viewportCount = vp.scissorCount = 1;
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     constexpr uint32_t kFillWireframe = 0x1B01;
-    rs.polygonMode = k.fill == kFillWireframe && feats_.fillModeNonSolid ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+    bool wire = (k.fill & kFillWireframeDebug) != 0 && feats_.fillModeNonSolid;
+    rs.polygonMode = (wire || k.fill == kFillWireframe) && feats_.fillModeNonSolid ? VK_POLYGON_MODE_LINE
+                                                                                  : VK_POLYGON_MODE_FILL;
     rs.cullMode = k.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     rs.frontFace = k.ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     rs.depthBiasEnable = k.zbias != 0 || k.zslope != 0;

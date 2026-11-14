@@ -57,6 +57,9 @@ Everything the PC build has, in a phone's shape:
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame
   with no scene in it. TIMELINE is still there to compare, at the next start.
+* **Wireframe**: GRAPHICS → WIREFRAME draws every triangle as its three edges. A model drawn smoothly but wrongly and a
+  model with one vertex gone look nothing alike in wireframe: one is a dense mesh in the wrong place, the other is a fan
+  of long triangles reaching across the screen. One photo of it says which.
 * **Send a frame**: GRAPHICS → SEND A FRAME TO THE DEV writes the frame's render targets into `dumps/` beside the settings, the
   largest first and then hands them to the share sheet, so a picture that comes out wrong can be sent from the phone in
   one tap and looked at pass by pass instead of guessed at from a screenshot. The depth targets go with them as grey,
