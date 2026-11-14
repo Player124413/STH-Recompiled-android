@@ -54,6 +54,10 @@ Everything the PC build has, in a phone's shape:
   with no scene in it. TIMELINE is still there to compare, at the next start.
 * **Dump frame**: GRAPHICS → DUMP FRAME AS PNG writes the frame's render targets into `dumps/` beside the settings, the
   largest first, so a picture that comes out wrong can be looked at pass by pass instead of guessed at from a screenshot.
+* **Safe graphics**: one toggle on the GRAPHICS page for a phone whose picture comes out wrong, applied as it is
+  pressed: the frame is drawn at the console's own size (no render resolution, no HD scene), the glow composite and the
+  extra upscale taps are skipped, dynamic resolution stands still and DXT is unpacked here instead of in the driver. It
+  is the first thing to try, and every one of those five also has a switch of its own to bisect it.
 * **This phone**: ABOUT prints the same facts the report logs - GPU, Vulkan version, driver, sync path, dynamic
   rendering, depth format, draw scale, swapchain, texture memory, draw counters - so one screenshot of that page compares
   two phones without a log file.

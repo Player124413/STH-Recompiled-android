@@ -266,6 +266,11 @@ void GraphicsPage() {
         Save();
         LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
     }
+    if (ToggleRow("SAFE GRAPHICS", port::g_safe_graphics)) {
+        port::g_safe_graphics = !port::g_safe_graphics;
+        Save();
+        LOGI("port: safe graphics %s", port::g_safe_graphics ? "on" : "off");
+    }
     if (Row("GPU SYNC", SyncName(), IM_COL32(240, 120, 110, 255), true)) {
         port::g_timeline_semaphores = (port::g_timeline_semaphores + 1) % 3;  // automatic -> timeline -> fences
         Save();
@@ -276,6 +281,11 @@ void GraphicsPage() {
         ApplyWidescreen();
         Save();
     }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
+    ImGui::TextWrapped("SAFE GRAPHICS is the one to try first when the picture comes out wrong: the frame is drawn at the "
+                       "console's own size, the glow composite and the extra upscale taps are skipped, and DXT is "
+                       "unpacked here instead of in the driver.");
+    ImGui::PopStyleColor();
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("DUMP FRAME AS PNG", IM_COL32(200, 170, 90, 255))) {
         host::DumpFrame();

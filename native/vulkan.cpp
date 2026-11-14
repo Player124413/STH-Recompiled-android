@@ -2429,7 +2429,7 @@ Target* VulkanBackend::EnsureTarget(const Surface& s, bool depth) {
     t.gh = gh;
     // the HD scene (src/common/render_ext.cpp on the PC): the game's 512x512 targets are made a quarter wider
     float scale = scale_;
-    if (shadow::g_hd_scene && gw == kSceneSize && gh == kSceneSize) scale *= kSceneBoost;
+    if (!port::g_safe_graphics && shadow::g_hd_scene && gw == kSceneSize && gh == kSceneSize) scale *= kSceneBoost;
     t.w = std::max(1u, uint32_t(std::lround(gw * scale)));
     t.h = std::max(1u, uint32_t(std::lround(gh * scale)));
     VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
@@ -2578,7 +2578,7 @@ bool VulkanBackend::Shrink(Image& src, uint32_t w, uint32_t h, Image& down, uint
 Image* VulkanBackend::CopySource(Target& t, Image& down) {
     if (t.depth) return nullptr;
     if (t.w != t.gw || t.h != t.gh) {
-        uint32_t taps = uint32_t(std::ceil(float(t.w) / t.gw - 1e-3f));
+        uint32_t taps = port::g_safe_graphics ? 1 : uint32_t(std::ceil(float(t.w) / t.gw - 1e-3f));
         return Shrink(t.img, t.gw, t.gh, down, std::max(taps, 1u)) ? &down : nullptr;
     }
     Transition(t.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -2740,7 +2740,7 @@ bool VulkanBackend::CreateTexture(Tex& tx, const TextureDesc& d, const FormatInf
     tx = Tex{};
     tx.d = d;
     bool bc = fi.compressed;
-    tx.decode = bc && !bc_;
+    tx.decode = bc && (!bc_ || port::g_safe_graphics);  // safe graphics does not ask a driver to unpack DXT
     switch (fi.host) {
         case Host::BC1: tx.fmt = VK_FORMAT_BC1_RGBA_UNORM_BLOCK; break;
         case Host::BC2: tx.fmt = VK_FORMAT_BC2_UNORM_BLOCK; break;
@@ -2909,6 +2909,7 @@ void VulkanBackend::BuildPipelineKey(const State& s, const Assembled& a, const D
 // (one pass mixing both, alpha blended) is left alone, so the frame never goes black for it
 bool VulkanBackend::GlowComposite(const State& s, const DrawTextures& stages) const {
     constexpr uint32_t kBlendOne = 1;
+    if (port::g_safe_graphics) return false;  // the composite is the last thing to trust on a picture that is wrong
     if (!draw_rt_ || draw_rt_->gw < guest_w_ || !SimpleState(s, kMBlendEnable) || SimpleState(s, kMDestBlend) != kBlendOne)
         return false;
     for (int i = 0; i < 4; i++) {
@@ -3469,8 +3470,9 @@ void VulkanBackend::ReleaseOldTextures() {
 }
 
 void VulkanBackend::ApplySettings() {
-    float want = app::RenderScale(guest_h_);
-    bool hd = shadow::g_hd_scene;
+    // safe graphics: the frame is drawn at the console's own size, so none of the scale paths run at all
+    float want = port::g_safe_graphics ? 1.0f : app::RenderScale(guest_h_);
+    bool hd = shadow::g_hd_scene && !port::g_safe_graphics;
     if (std::fabs(want - scale_) <= 1e-4f && hd == hd_applied_) return;
     Submit(true, false);
     for (auto& [key, t] : targets_) {
@@ -3510,6 +3512,7 @@ void VulkanBackend::Report(const char* why) {
     LOGI("graphics: %u textures live (%.1f MB, %u of them decoded by the CPU), render %u%%, draw scale %.3f, sync %s",
          uint32_t(textures_.size()), double(tex_bytes) / 1048576.0, tex_decoded, dynres::Percent(), scale_,
          timeline_ok_ ? "timeline semaphores" : "fences");
+    if (port::g_safe_graphics) LOGI("graphics: safe graphics on -- real size, no glow composite, one tap, CPU DXT");
     LOGI("graphics: BC %d, ASTC %d, ETC2 %d, point size %.0f to %.0f, lod bias %.1f, depth %s, dynamic rendering %d, "
          "render scale %.3f, HD scene %d, texture filter %d, aniso %u",
          caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2,
@@ -3582,7 +3585,7 @@ void VulkanBackend::Present(const Surface& front) {
         fps_t_ = now;
     }
     if (presents_ % 600 == 0) SavePipelineCache();
-    dynres::Frame();
+    if (!port::g_safe_graphics) dynres::Frame();
     ApplySettings();
 }
 
