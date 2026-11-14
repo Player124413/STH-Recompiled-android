@@ -65,6 +65,10 @@ Everything the PC build has, in a phone's shape:
   own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
   reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,
   and a texture unpacked wrongly is what smears and checkerboards look like.
+* **The controller is always plugged in**: port 1 never says "nothing connected", not while the port's own menu has the
+  input, not after a pad drops, not with the touch controls off. The game answers an empty port with its "Please
+  reconnect the controller" message, pauses, and leaves the frame it was drawing on the screen - which is what a picture
+  with stale pieces of earlier frames in it actually is.
 * **Vertex fetch**: with safe graphics on, every vertex is converted to float4 on the CPU and the driver fetches no host
   formats at all. Safe graphics off restores the faster path, where the guest's own buffers are read by the GPU - which is
   also the path a driver can get wrong, and a model drawn stretched over the screen is what that looks like.

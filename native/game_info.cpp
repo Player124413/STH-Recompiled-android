@@ -46,12 +46,19 @@ const app::GameInfo app::kGame = {
     .ui = [](double fps) { shadow::ApplyWidescreen(); shadow::MenuUi(fps); },
     .pad = [](int port, input::Pad& pad) {
         touch::Apply(port, pad);  // the touch controls are port 0's, under a real controller's
-        if (shadow::MenuPad(port, pad)) return;  // the menu has the input and has already set the pad
-        if (touch::Editing()) {  // the layout editor has it too
+        if (shadow::MenuPad(port, pad)) {
+            // the menu has the input this frame and has set the pad itself; the plug below still goes on
+        } else if (touch::Editing()) {  // the layout editor has it too
             bool c = pad.connected;
             pad = input::Pad{};
             pad.connected = c;
         }
+        // A controller is plugged into port 1 on the console and never gets pulled out. The touch controls already say so
+        // while they are up, but the port's own menu takes the input, and a phone whose pad dropped or whose touch
+        // controls are off said "nothing plugged in" -- and the game answers that with its "Please reconnect the
+        // controller" message, pauses, and leaves the frame it was in the middle of drawing on the screen for as long as
+        // the message is up. That is what a paused frame with stale pieces in it looks like.
+        if (port >= 0) pad.connected = true;
     },
     .rumble = nullptr,
 };
