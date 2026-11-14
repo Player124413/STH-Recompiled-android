@@ -27,6 +27,7 @@
 #include "app/app.h"
 #include "core/log.h"
 #include "common/render_ext.h"
+#include "gles.h"
 #include "gpu/backend.h"
 #include "gpu/shaders.h"
 #include "gpu/texture.h"
@@ -3682,6 +3683,11 @@ VulkanBackend* g_vulkan = nullptr;
 }  // namespace
 
 std::unique_ptr<Backend> CreateBackend() {
+    // the port's own renderer choice: 1 is GL ES, which the second backend answers with, and 0 keeps Vulkan
+    if (port::g_renderer == 1) {
+        if (auto gles = CreateGlesBackend()) return gles;
+        LOGW("gl: the OpenGL ES renderer did not start, Vulkan draws this run");
+    }
     auto backend = std::make_unique<VulkanBackend>();
     g_vulkan = backend.get();
     return backend;
@@ -3693,13 +3699,14 @@ void WaitGpuFrame(uint64_t n) {
 
 void GraphicsReport() {
     if (g_vulkan) g_vulkan->Report("asked");
+    else GlesGraphicsReport();
 }
 
 void DumpFrame() {
     if (g_vulkan) g_vulkan->DumpFrame();
 }
 
-std::string GraphicsInfo() { return g_vulkan ? g_vulkan->Info() : std::string("no renderer"); }
+std::string GraphicsInfo() { return g_vulkan ? g_vulkan->Info() : GlesGraphicsInfo(); }
 
 }  // namespace gpu
 

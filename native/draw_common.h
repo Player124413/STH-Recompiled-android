@@ -88,6 +88,23 @@ constexpr size_t kTsView = 2;
 constexpr size_t kTsProjection = 3;
 constexpr size_t kTsTexture0 = 16;
 constexpr size_t kTsWorld = 256;
+constexpr uint32_t kSigWholeMax = 65536;
+constexpr uint32_t kSigSamples = 64;
+constexpr uint32_t kSigSampleBytes = 64;
+
+// a cheap signature of a resource's guest memory, so a CPU write is noticed without comparing megabytes
+inline uint64_t MemSig(uint32_t data, uint32_t total) {
+    const uint8_t* p = static_cast<const uint8_t*>(kernel::HostPtr(data));
+    uint64_t sig = Hash(&total, sizeof(total));
+    if (!p) return sig;
+    if (total <= kSigWholeMax) return Hash(p, total, sig);
+    for (uint32_t i = 0; i < kSigSamples; i++) {
+        const uint8_t* sample = p + uint64_t(total - kSigSampleBytes) * i / (kSigSamples - 1);
+        sig = Hash(sample, kSigSampleBytes, sig);
+    }
+    return sig;
+}
+
 constexpr float kGlowBoxTexels = 3.0f;
 constexpr float kBlurTapTexels = 7.0f / 6;
 
@@ -179,6 +196,8 @@ uint8_t ShadowDepthKind(uint32_t format) { return format == kFmtD16 || format ==
 
 uint32_t GuestPitch(uint32_t width) { return (width * 4 + 63) & ~63u; }
 
+constexpr float kDepth24Max = 16777215.0f;  // the console's depth bias is in 24 bit steps of its range
+
 struct StagePalette {
     uint32_t colours[256] = {};
     uint32_t va = 0;
@@ -221,6 +240,19 @@ uint64_t VertexKey(const State& s, const Assembled& a, const DrawShaders& sh) {
     if (!sh.prog) vkey = Hash(&sh.fk, sizeof(sh.fk), vkey);
     if (a.topology == Topology::Points) vkey ^= kPointsSalt;
     return vkey;
+}
+
+// a point list writes its size: Vulkan leaves it undefined otherwise; empty when the source has no main to wrap.
+// surf.w is host pixels per console pixel, so a point covers its console pixel whatever the frame is rendered at
+std::string PointsHlsl(const std::string& src) {
+    size_t at = src.find("VOut main(");
+    if (at == std::string::npos) return {};
+    size_t p = at + 10, sp = src.find(' ', p);
+    std::string type = src.substr(p, sp - p);
+    // the module's entry point is named main: the program's own main goes by another name
+    std::string out = src;
+    out.replace(at, 10, "VOut vs_body(");
+    return out + "\nVOut main_points(" + type + " i, out float psize : PSIZE) { psize = max(surf.w, 1); return vs_body(i); }\n";
 }
 
 std::string VertexHlsl(const State& s, const Assembled& a, const DrawShaders& sh) {

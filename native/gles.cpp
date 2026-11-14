@@ -1,0 +1,1125 @@
+// The GL ES 3.0 renderer: the port's second backend, for phones whose Vulkan driver draws the picture wrong. A Mali-G57
+// in the reports stretches a character's model toward the camera, with the same game files, the same render targets and
+// the same SPIR-V; GL ES is a different driver front end on the same silicon, and the shaders reach it through
+// SPIRV-Cross instead of the driver's Vulkan compiler.
+//
+// It draws what the Vulkan backend draws, from the same gpu::State, the same HLSL and the same constants (draw_common.h
+// holds those verbatim). Where GL ES 3.00 cannot express something the picture differs, and each such place says so.
+#include <SDL3/SDL.h>
+
+#include <GLES3/gl3.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <imgui.h>
+#include <backends/imgui_impl_opengl3.h>
+
+#include "app/app.h"
+#include "core/log.h"
+#include "draw_common.h"
+#include "glsl.h"
+#include "gles.h"
+#include "gpu/backend.h"
+#include "host.h"
+#include "kernel/kernel.h"
+#include "kernel/memory.h"
+
+namespace {
+
+using namespace gpu;
+using namespace port::draw;
+
+// ---- what a draw's textures are asked for, as GL sampler state
+
+GLenum Blend(uint32_t v, bool alpha) {
+    switch (v) {
+        case 0: return GL_ZERO;
+        case 1: return GL_ONE;
+        case 0x300: return alpha ? GL_SRC_ALPHA : GL_SRC_COLOR;
+        case 0x301: return alpha ? GL_ONE_MINUS_SRC_ALPHA : GL_ONE_MINUS_SRC_COLOR;
+        case 0x302: return GL_SRC_ALPHA;
+        case 0x303: return GL_ONE_MINUS_SRC_ALPHA;
+        case 0x304: return GL_DST_ALPHA;
+        case 0x305: return GL_ONE_MINUS_DST_ALPHA;
+        case 0x306: return alpha ? GL_DST_ALPHA : GL_DST_COLOR;
+        case 0x307: return alpha ? GL_ONE_MINUS_DST_ALPHA : GL_ONE_MINUS_DST_COLOR;
+        case 0x308: return alpha ? GL_ONE : GL_SRC_ALPHA_SATURATE;
+        case 0x8001: return GL_CONSTANT_COLOR;
+        case 0x8002: return GL_ONE_MINUS_CONSTANT_COLOR;
+        case 0x8003: return GL_CONSTANT_ALPHA;
+        case 0x8004: return GL_ONE_MINUS_CONSTANT_ALPHA;
+        default: return GL_ONE;
+    }
+}
+
+GLenum BlendOp(uint32_t v) {
+    switch (v) {
+        case 0x800A: return GL_FUNC_SUBTRACT;
+        case 0x800B: return GL_FUNC_REVERSE_SUBTRACT;
+        case 0x8007: return GL_MIN;
+        case 0x8008: return GL_MAX;
+        default: return GL_FUNC_ADD;
+    }
+}
+
+GLenum StencilOp(uint32_t v) {
+    switch (v) {
+        case 0: return GL_ZERO;
+        case 0x1E01: return GL_REPLACE;
+        case 0x1E02: return GL_INCR;
+        case 0x1E03: return GL_DECR;
+        case 0x150A: return GL_INVERT;
+        case 0x8507: return GL_INCR_WRAP;
+        case 0x8508: return GL_DECR_WRAP;
+        default: return GL_KEEP;
+    }
+}
+
+GLenum Wrap(uint32_t v) {
+    switch (v) {
+        case 2: return GL_MIRRORED_REPEAT;
+        case 3: case 5: return GL_CLAMP_TO_EDGE;
+        default: return GL_REPEAT;  // 4, clamp to border, has no GL ES 3.00 form: its edges come out the frame's
+    }
+}
+
+// the console's depth comparison, D3DCMPFUNC 1..8, as GL ES names the same eight
+GLenum Compare(uint32_t v) {
+    switch (v) {
+    case 1: return GL_NEVER;
+    case 2: return GL_LESS;
+    case 3: return GL_EQUAL;
+    case 4: return GL_LEQUAL;
+    case 5: return GL_GREATER;
+    case 6: return GL_NOTEQUAL;
+    case 7: return GL_GEQUAL;
+    default: return GL_ALWAYS;
+    }
+}
+
+GLenum MinFilter(uint32_t min, uint32_t mip, bool mipmapped, bool linearable) {
+    bool lin = min >= kTexfLinear && linearable;
+    if (!mipmapped) return lin ? GL_LINEAR : GL_NEAREST;
+    if (mip == kTexfLinear) return lin ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR;
+    return lin ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST;
+}
+
+struct GImage {
+    GLuint tex = 0;
+    uint32_t w = 0, h = 0;
+};
+
+struct Target {
+    GImage img;
+    bool depth = false;
+    uint32_t gw = 0, gh = 0, w = 0, h = 0;
+    uint32_t data = 0, bytes = 0;
+    GLuint fbo = 0;
+    bool drawn = false;   // the GPU wrote it since the last read-back
+    uint64_t sig = 0;     // guest memory as last matched
+    uint64_t epoch = 0;   // the lock counter it was last uploaded at
+    std::vector<uint8_t> read;
+};
+
+struct Tex {
+    GImage img;
+    TextureDesc d;
+    uint32_t levels = 1;
+    bool decode = false;  // DXT unpacked here, as every phone needs
+    uint64_t sig = 0;
+    uint64_t epoch = 0;
+};
+
+struct Program {
+    GLuint id = 0;
+    std::vector<glsl::Sampler> samplers;
+};
+
+// the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
+const char* kPresentVertex = R"(#version 300 es
+out vec2 v_uv;
+void main() {
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    v_uv = p;
+    gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+}
+)";
+
+const char* kPresentPixel = R"(#version 300 es
+precision highp float;
+uniform sampler2D src;
+uniform sampler2D lut;
+uniform int gamma;
+in vec2 v_uv;
+out vec4 o;
+void main() {
+    vec4 c = texture(src, v_uv);
+    if (gamma != 0) {
+        c.r = texture(lut, vec2(c.r, 0.5)).r;
+        c.g = texture(lut, vec2(c.g, 0.5)).g;
+        c.b = texture(lut, vec2(c.b, 0.5)).b;
+    }
+    o = vec4(c.rgb, 1.0);
+}
+)";
+
+class GlesBackend final : public Backend {
+  public:
+    bool Init(uint32_t width, uint32_t height) override;
+    void Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
+               uint32_t stencil) override;
+    void Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) override;
+    void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
+    void Present(const Surface& front) override;
+    void Sync(uint32_t data_va, uint32_t size) override;
+    void SyncLate(uint32_t data_va) override { Sync(data_va, 0); }
+    void Flush() override { glFlush(); }
+    void SetGamma(const uint8_t* ramp) override;
+
+    void Report(const char* what);
+    const std::string& Name() const { return renderer_; }
+
+  private:
+    // resources
+    Target* FindTarget(uint32_t data, bool depth);
+    Target* EnsureTarget(const Surface& s, bool depth);
+    void ReleaseTarget(Target& t);
+    bool UploadTarget(Target& t, const Surface& s);
+    Tex* EnsureTexture(const TextureDesc& d, uint64_t key);
+    void UploadTexture(Tex& tx, const TextureDesc& d, const uint32_t* colours);
+    void ReleaseTexture(Tex& tx);
+    // shaders
+    uint64_t Module(const std::string& hlsl, glsl::Stage stage, const char* entry);
+    Program* EnsureProgram(uint64_t vs, uint64_t ps);
+    // state
+    GLuint Bind(const Target* rt, const Target* ds);
+    bool BindStageTextures(const State& s, DrawTextures& stages);
+    bool Readback(Target& t, std::vector<uint8_t>& px);
+    void SetSamplerState(const State& s, int stage, const DrawTextures& stages, GLuint tex);
+    void RememberDrawn(Target* rt, Target* ds);
+    GLuint Feedback(GLuint tex, uint32_t w, uint32_t h);  // a copy of a target a draw reads while it writes it
+
+    uint32_t guest_w_ = 0, guest_h_ = 0;
+    float scale_ = 1.0f;
+    uint32_t window_w_ = 0, window_h_ = 0;
+    std::unordered_map<uint64_t, Target> targets_;
+    std::unordered_map<uint64_t, Tex> textures_;
+    std::unordered_map<uint64_t, uint64_t> shader_src_;  // source hash -> module hash
+    std::unordered_map<uint64_t, GLuint> modules_;
+    std::unordered_map<uint64_t, Program> programs_;
+    GLuint vao_ = 0, vbo_ = 0, ibo_ = 0;
+    size_t vbo_size_ = 0, ibo_size_ = 0;
+    GLuint ubo_[2] = {};
+    GLuint present_ = 0, lut_ = 0;
+    bool gamma_ = false;
+    std::vector<uint8_t> ramp_;
+    std::unordered_map<uint64_t, std::vector<glsl::Sampler>> sampler_units_;  // per shader module, until it is linked
+    std::unordered_map<uint64_t, GLuint> fbos_;  // a colour and a depth target drawn into together
+    Assembled asm_;
+    GLint gamma_loc_ = -1;
+    bool warned_cube_ = false;
+    GLuint feedback_tex_ = 0, feedback_fbo_ = 0;  // the copy feedback stages read
+    uint32_t feedback_w_ = 0, feedback_h_ = 0;
+    GLuint scratch_ = 0;   // guest sized copy of a target being read back
+    GLuint scratch_fbo_ = 0;
+    uint32_t scratch_w_ = 0, scratch_h_ = 0;
+    uint32_t draw_fbo_ = 0, draw_rt_tex_ = 0, draw_ds_tex_ = 0;
+    std::string renderer_ = "?";  // the driver's name, for the graphics report
+    uint64_t presents_ = 0;
+    uint32_t drawn_targets_ = 0, uploaded_textures_ = 0, programs_built_ = 0;
+};
+
+bool GlesBackend::Init(uint32_t width, uint32_t height) {
+    guest_w_ = width;
+    guest_h_ = height;
+    SDL_Window* window = host::Window();
+    if (!window) {
+        LOGE("gl: no window");
+        return false;
+    }
+    SDL_GLContext ctx = SDL_GL_CreateContext(window);
+    if (!ctx) {
+        LOGE("gl: no GL context: %s", SDL_GetError());
+        return false;
+    }
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    renderer_ = renderer ? renderer : "?";
+    LOGI("gl: %s, %s", version ? version : "?", renderer_.c_str());
+    int major = 0, minor = 0;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    if (major < 3) {
+        LOGE("gl: GL ES 3.0 is needed, this driver has %d.%d", major, minor);
+        return false;
+    }
+    // the frame is drawn at the console's own size, not at a multiple of it: this renderer's targets then hold exactly
+    // the pixels the game's shaders ask for, and the present pass stretches the frame over the phone's screen by itself
+    scale_ = 1.0f;
+    int win_w = 0, win_h = 0;
+    host::WindowPixels(win_w, win_h);
+    window_w_ = uint32_t(std::max(win_w, 1));
+    window_h_ = uint32_t(std::max(win_h, 1));
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glDisable(GL_DITHER);
+    glDisable(GL_CULL_FACE);
+    glGenVertexArrays(1, &vao_);
+    glBindVertexArray(vao_);
+    glGenBuffers(1, &vbo_);
+    glGenBuffers(1, &ibo_);
+    glGenBuffers(2, ubo_);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_[0]);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(State::vsc), nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_[1]);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(DrawConstants), nullptr, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo_[0]);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo_[1]);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    // the frame goes to the window through one full screen pass, gamma ramp included
+    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vs, 1, &kPresentVertex, nullptr);
+    glCompileShader(vs);
+    GLuint ps = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(ps, 1, &kPresentPixel, nullptr);
+    glCompileShader(ps);
+    present_ = glCreateProgram();
+    glAttachShader(present_, vs);
+    glAttachShader(present_, ps);
+    glLinkProgram(present_);
+    glDeleteShader(vs);
+    glDeleteShader(ps);
+    GLint linked = 0;
+    glGetProgramiv(present_, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[1024] = {};
+        glGetProgramInfoLog(present_, sizeof(log), nullptr, log);
+        LOGE("gl: the present pass does not link: %s", log);
+        return false;
+    }
+    glUseProgram(present_);
+    glUniform1i(glGetUniformLocation(present_, "src"), 0);
+    glUniform1i(glGetUniformLocation(present_, "lut"), 1);
+    gamma_loc_ = glGetUniformLocation(present_, "gamma");
+    glUseProgram(0);
+    glGenTextures(1, &lut_);
+    glBindTexture(GL_TEXTURE_2D, lut_);
+    std::vector<uint8_t> identity(256 * 4);
+    for (int i = 0; i < 256; i++) identity[size_t(i) * 4 + 0] = identity[size_t(i) * 4 + 1] = identity[size_t(i) * 4 + 2] =
+        uint8_t(i), identity[size_t(i) * 4 + 3] = 255;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, identity.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    ramp_.assign(256 * 3, 0);
+    if (!ImGui_ImplOpenGL3_Init("#version 300 es")) {
+        LOGE("gl: the overlay does not start");
+        return false;
+    }
+    // the console's vertices are read by the CPU and handed over as float4: one vertex layout, no driver format rules
+    g_raw_vertices = false;
+    LOGI("gl: %ux%u guest, %ux%u window, render scale %.3f", width, height, window_w_, window_h_, scale_);
+    return true;
+}
+
+// ---- targets and textures
+
+Target* GlesBackend::FindTarget(uint32_t data, bool depth) {
+    auto it = targets_.find(uint64_t(data) << 1 | uint64_t(depth));
+    return it == targets_.end() ? nullptr : &it->second;
+}
+
+void GlesBackend::ReleaseTarget(Target& t) {
+    for (auto it = fbos_.begin(); it != fbos_.end();) {
+        uint32_t rt = uint32_t(it->first >> 32), ds = uint32_t(it->first);
+        if (rt == t.img.tex || ds == t.img.tex) {
+            glDeleteFramebuffers(1, &it->second);
+            it = fbos_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (t.img.tex) glDeleteTextures(1, &t.img.tex);
+    if (t.fbo) glDeleteFramebuffers(1, &t.fbo);
+    t = Target{};
+}
+
+Target* GlesBackend::EnsureTarget(const Surface& s, bool depth) {
+    if (!s.header) return nullptr;
+    uint32_t data = mem::VirtualFromPhysical(s.data), gw = 0, gh = 0;
+    SurfaceSize(s, gw, gh);
+    uint64_t key = uint64_t(data) << 1 | uint64_t(depth);
+    auto it = targets_.find(key);
+    if (it != targets_.end() && it->second.gw == gw && it->second.gh == gh) return &it->second;
+    if (it != targets_.end()) ReleaseTarget(it->second);
+    Target t;
+    t.depth = depth;
+    t.gw = gw;
+    t.gh = gh;
+    t.w = std::max(1u, uint32_t(std::lround(gw * scale_)));
+    t.h = std::max(1u, uint32_t(std::lround(gh * scale_)));
+    glGenTextures(1, &t.img.tex);
+    glBindTexture(GL_TEXTURE_2D, t.img.tex);
+    if (depth) {
+        // one depth-stencil texture, so a draw can read the shadow map it fills in an earlier pass
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, GLsizei(t.w), GLsizei(t.h), 0, GL_DEPTH_STENCIL,
+                     GL_UNSIGNED_INT_24_8, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GLsizei(t.w), GLsizei(t.h), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    t.img.w = t.w;
+    t.img.h = t.h;
+    glGenFramebuffers(1, &t.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    if (depth)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, t.img.tex, 0);
+    else
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.img.tex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    t.data = data;
+    t.bytes = GuestPitch(gw) * gh;  // a console pixel is four bytes, depth and colour alike
+    t.epoch = DirtyEpoch(data);
+    t.sig = MemSig(data, t.bytes);
+    drawn_targets_++;
+    Target& ref = targets_[key];
+    ref = std::move(t);
+    return &ref;
+}
+
+// the CPU wrote the target's guest memory since the GPU last drew it: upload what it wrote
+bool GlesBackend::UploadTarget(Target& t, const Surface& s) {
+    (void)s;
+    if (t.depth) return false;
+    if (!t.data || (t.w == t.gw && t.h == t.gh)) {
+        const uint8_t* p = static_cast<const uint8_t*>(kernel::HostPtr(t.data));
+        if (!p) return false;
+        uint32_t pitch = GuestPitch(t.gw);
+        std::vector<uint8_t> tight(size_t(t.gw) * t.gh * 4);
+        for (uint32_t y = 0; y < t.gh; y++) {
+            const uint8_t* row = p + size_t(y) * pitch;
+            uint8_t* out = &tight[size_t(y) * t.gw * 4];
+            for (uint32_t x = 0; x < t.gw; x++, row += 4, out += 4) {
+                out[0] = row[2];  // guest BGRA to the RGBA the texture was made with
+                out[1] = row[1];
+                out[2] = row[0];
+                out[3] = row[3];
+            }
+        }
+        glBindTexture(GL_TEXTURE_2D, t.img.tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GLsizei(t.gw), GLsizei(t.gh), GL_RGBA, GL_UNSIGNED_BYTE, tight.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        t.sig = MemSig(t.data, t.bytes);
+        t.epoch = DirtyEpoch(t.data);
+        t.drawn = false;
+        return true;
+    }
+    return false;  // a scaled target: the guest wrote pixels the GPU has already drawn over, leave the picture alone
+}
+
+Tex* GlesBackend::EnsureTexture(const TextureDesc& d, uint64_t key) {
+    auto it = textures_.find(key);
+    if (it != textures_.end()) {
+        Tex& tx = it->second;
+        bool same = tx.d.format == d.format && tx.d.width == d.width && tx.d.height == d.height && tx.d.levels == d.levels &&
+                    tx.d.cube == d.cube;
+        if (same && tx.epoch == DirtyEpoch(d.data)) return &tx;
+        if (!same) ReleaseTexture(tx);
+        else return &tx;  // the pixels changed under it: the caller uploads
+    }
+    Tex tx;
+    tx.d = d;
+    const FormatInfo& fi = Format(d.format);
+    tx.decode = fi.compressed;
+    tx.levels = std::max(1u, d.levels);
+    glGenTextures(1, &tx.img.tex);
+    glBindTexture(GL_TEXTURE_2D, tx.img.tex);
+    GLsizei w = GLsizei(d.cube ? d.width : d.width), h = GLsizei(d.height);
+    glTexStorage2D(GL_TEXTURE_2D, GLsizei(tx.levels), GL_RGBA8, w, h);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    tx.img.w = d.width;
+    tx.img.h = d.height;
+    tx.epoch = ~0ull;  // never matches a write counter, so the caller uploads the pixels this time round
+    uploaded_textures_++;
+    Tex& ref = textures_[key];
+    ref = std::move(tx);
+    return &ref;
+}
+
+void GlesBackend::ReleaseTexture(Tex& tx) {
+    if (tx.img.tex) glDeleteTextures(1, &tx.img.tex);
+    tx = Tex{};
+}
+
+// the console's texture to RGBA texels: palettes and DXT are unpacked on the CPU, as the Vulkan backend does for every
+// phone it runs on
+void GlesBackend::UploadTexture(Tex& tx, const TextureDesc& d, const uint32_t* colours) {
+    const FormatInfo& fi = Format(d.format);
+    uint32_t face = 0;
+    glBindTexture(GL_TEXTURE_2D, tx.img.tex);
+    for (uint32_t l = 0; l < tx.levels; l++) {
+        const uint8_t* base = static_cast<const uint8_t*>(kernel::HostPtr(d.data));
+        if (!base) break;
+        std::vector<uint8_t> px, decoded;
+        uint32_t pitch = 0;
+        DecodeLevel(d, l, face, base, colours, px, pitch);
+        uint32_t w = std::max(d.width >> l, 1u), h = std::max(d.height >> l, 1u);
+        const uint8_t* src = px.data();
+        if (tx.decode) {
+            DecodeDxt(fi.host, px, pitch, w, h, 1, decoded);
+            src = decoded.data();
+            pitch = w * 4;
+        }
+        // BGRA to RGBA, which is what GL ES takes without asking for an extension
+        std::vector<uint8_t> rgba(size_t(w) * h * 4);
+        for (uint32_t y = 0; y < h; y++)
+            for (uint32_t x = 0; x < w; x++) {
+                const uint8_t* in = src + size_t(y) * pitch + size_t(x) * 4;
+                uint8_t* out = &rgba[(size_t(y) * w + x) * 4];
+                out[0] = in[2];
+                out[1] = in[1];
+                out[2] = in[0];
+                out[3] = in[3];
+            }
+        glTexSubImage2D(GL_TEXTURE_2D, GLint(l), 0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    tx.sig = MemSig(d.data, std::max(1u, TotalSize(d)));
+    tx.epoch = DirtyEpoch(d.data);
+}
+
+// ---- shaders
+
+uint64_t GlesBackend::Module(const std::string& hlsl, glsl::Stage stage, const char* entry) {
+    uint64_t seed = Hash(entry, std::strlen(entry), stage == glsl::Stage::Vertex ? 1 : 2);
+    uint64_t hash = Hash(hlsl.data(), hlsl.size(), seed);
+    if (modules_.count(hash)) return hash;
+    std::string code;
+    std::vector<glsl::Sampler> samplers;
+    if (!glsl::Compile(hlsl, entry, stage, hash, code, samplers)) return 0;
+    GLenum type = stage == glsl::Stage::Vertex ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
+    GLuint sh = glCreateShader(type);
+    const char* text = code.c_str();
+    glShaderSource(sh, 1, &text, nullptr);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[2048] = {};
+        glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+        LOGE("gl: %s %s does not compile: %s", stage == glsl::Stage::Vertex ? "vertex" : "pixel", entry, log);
+        LOGE("%s", code.c_str());
+        glDeleteShader(sh);
+        return 0;
+    }
+    modules_[hash] = sh;
+    // the sampler units the program expects, kept beside the program's shader until it is linked
+    sampler_units_[hash] = samplers;
+    return hash;
+}
+
+Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
+    uint64_t pair[2] = {vs, ps};
+    uint64_t key = Hash(pair, sizeof(pair));
+    auto it = programs_.find(key);
+    if (it != programs_.end()) return it->second.id ? &it->second : nullptr;
+    Program p;
+    p.id = glCreateProgram();
+    glAttachShader(p.id, modules_[vs]);
+    glAttachShader(p.id, modules_[ps]);
+    glLinkProgram(p.id);
+    GLint ok = 0;
+    glGetProgramiv(p.id, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[2048] = {};
+        glGetProgramInfoLog(p.id, sizeof(log), nullptr, log);
+        LOGE("gl: link failed: %s", log);
+        glDeleteProgram(p.id);
+        p.id = 0;
+    } else {
+        // the constaNt blocks are bound by name: GL ES 3.00 has no layout(binding) for them
+        GLuint vc = glGetUniformBlockIndex(p.id, "VC"), dc = glGetUniformBlockIndex(p.id, "DC");
+        if (vc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, vc, 0);
+        if (dc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, dc, 1);
+        for (const auto& list : {sampler_units_[vs], sampler_units_[ps]})
+            for (const glsl::Sampler& s : list) {
+                GLint at = glGetUniformLocation(p.id, s.name.c_str());
+                if (at >= 0) glUniform1i(at, GLint(s.unit));
+                bool known = false;
+                for (const glsl::Sampler& have : p.samplers) known = known || have.name == s.name;
+                if (!known) p.samplers.push_back(s);
+            }
+        programs_built_++;
+    }
+    Program& ref = programs_[key];
+    ref = std::move(p);
+    return ref.id ? &ref : nullptr;
+}
+
+
+// ---- drawing state
+
+GLuint GlesBackend::Bind(const Target* rt, const Target* ds) {
+    uint32_t rt_tex = rt ? rt->img.tex : 0, ds_tex = ds ? ds->img.tex : 0;
+    uint64_t key = uint64_t(rt_tex) << 32 | uint64_t(ds_tex);
+    auto it = fbos_.find(key);
+    if (it != fbos_.end()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, it->second);
+        return it->second;
+    }
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    if (rt) glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_tex, 0);
+    if (ds) glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, ds_tex, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) LOGE("gl: framebuffer incomplete (%04X)", status);
+    fbos_[key] = fbo;
+    return fbo;
+}
+
+void GlesBackend::RememberDrawn(Target* rt, Target* ds) {
+    if (rt) rt->drawn = true;
+    if (ds) ds->drawn = true;
+}
+
+// the stage's texture, its sampler state applied to the texture object (GL ES keeps filtering and wrapping there) and
+// the stage's place in the draw's constant block
+bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
+    // the target this draw writes into: a stage that names it is read from a copy, made before the draw
+    uint32_t rt_tex = 0;
+    if (Target* rt = FindTarget(mem::VirtualFromPhysical(s.rt.data), false)) rt_tex = rt->img.tex;
+    for (int i = 0; i < 4; i++) {
+        stages.tex[i] = 0;
+        stages.info[i] = TexInfo{};
+        stages.levels[i] = 1;
+        uint32_t va = s.textures[size_t(i)];
+        if (!va) continue;
+        TextureDesc d;
+        if (!Describe(va, d)) continue;
+        const FormatInfo& fi = Format(d.format);
+        uint32_t data = mem::VirtualFromPhysical(d.data);
+        GLuint tex = 0;
+        uint32_t levels = 1;
+        Target* as_target = FindTarget(data, fi.depth != 0);
+        if (as_target) {
+            // the pixels a stage shows are the GPU's when the game drew into them, and the guest's when it wrote them
+            if (!as_target->depth && DirtyEpoch(as_target->data) > as_target->epoch) {
+                uint64_t sig = MemSig(as_target->data, as_target->bytes);
+                as_target->epoch = DirtyEpoch(as_target->data);
+                if (sig != as_target->sig) {
+                    as_target->sig = sig;
+                    Surface su;
+                    su.header = s.textures[size_t(i)];
+                    su.data = as_target->data;
+                    UploadTarget(*as_target, su);
+                }
+            }
+            tex = as_target->img.tex;
+            if (!as_target->depth) {
+                stages.rt[i] = true;
+                stages.gw[i] = as_target->gw;
+                stages.k[i] = float(as_target->w) / float(as_target->gw);
+            }
+        } else {
+            StagePalette palette;
+            ReadStagePalette(s, i, d, palette);
+            uint64_t key = Hash(&d.data, sizeof(d.data));
+            uint64_t more[4] = {d.format, d.width, d.height, d.levels * 2 + (d.cube ? 1 : 0)};
+            key = Hash(more, sizeof(more), key);
+            Tex* tx = EnsureTexture(d, key);
+            if (!tx) continue;
+            if (tx->epoch != DirtyEpoch(d.data)) UploadTexture(*tx, d, palette.va ? palette.colours : nullptr);
+            tex = tx->img.tex;
+            levels = tx->levels;
+            if (d.cube || d.depth > 1) {
+                // GL ES has cube maps and volumes, but this backend has only been written for 2D so far: the stage is
+                // read from its first level as a flat texture, which is enough for the port to run and is logged once
+                if (!warned_cube_) {
+                    warned_cube_ = true;
+                    LOGI("gl: %08X is %s, read flat by this renderer", d.data, d.cube ? "a cube map" : "a volume texture");
+                }
+            }
+        }
+        if (fi.depth) stages.info[i].shadow = ShadowDepthKind(d.format);
+        stages.info[i].kind = kTex2D;
+        stages.levels[i] = levels;
+        // a target sampled while the draw writes into it: GL leaves that undefined, so it is copied out first
+        if (tex == rt_tex && rt_tex) tex = Feedback(tex, as_target->w, as_target->h);
+        glActiveTexture(GLenum(GL_TEXTURE0 + i));
+        glBindTexture(GL_TEXTURE_2D, tex);
+        stages.tex[i] = tex;
+        // sampler state: GL ES 3.00 has one object per unit, so the texture carries these
+        const auto& t = s.tss[size_t(i)];
+        bool shadow = stages.info[i].shadow != 0;
+        bool linearable = fi.host != Host::R32F && fi.host != Host::R16Unorm;
+        if (shadow) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, Compare(s.rs[kRsShadowFunc]));
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        } else {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                            GLenum(MinFilter(t[kTssMinFilter], t[kTssMipFilter], levels > 1, linearable)));
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                            t[kTssMagFilter] >= kTexfLinear && linearable ? GL_LINEAR : GL_NEAREST);
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLenum(Wrap(t[kTssAddressU])));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLenum(Wrap(t[kTssAddressV])));
+    }
+    return true;
+}
+
+// a stage that names the target the draw writes into: GL leaves that read undefined, the Vulkan backend keeps a copy,
+// and so does this one, taken from the target before the draw
+GLuint GlesBackend::Feedback(GLuint tex, uint32_t w, uint32_t h) {
+    if (!w || !h) return tex;
+    if (feedback_tex_ && (feedback_w_ != w || feedback_h_ != h)) {
+        glDeleteTextures(1, &feedback_tex_);
+        glDeleteFramebuffers(1, &feedback_fbo_);
+        feedback_tex_ = 0;
+        feedback_fbo_ = 0;
+    }
+    if (!feedback_tex_) {
+        glGenTextures(1, &feedback_tex_);
+        glBindTexture(GL_TEXTURE_2D, feedback_tex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GLsizei(w), GLsizei(h), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &feedback_fbo_);
+        feedback_w_ = w;
+        feedback_h_ = h;
+    }
+    Target* src = nullptr;
+    for (auto& [key, t] : targets_)
+        if (t.img.tex == tex) src = &t;
+    if (!src) return tex;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, feedback_fbo_);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, feedback_tex_, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src->fbo);
+    glBlitFramebuffer(0, 0, GLint(w), GLint(h), 0, 0, GLint(w), GLint(h), GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return feedback_tex_;
+}
+
+// ---- what the game asks the renderer to do
+
+void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
+                        uint32_t stencil) {
+    Target* rt = s.rt.header ? EnsureTarget(s.rt, false) : nullptr;
+    Target* ds = s.zs.header ? EnsureTarget(s.zs, true) : nullptr;
+    if (!rt && !ds) return;
+    Bind(rt, ds);
+    Target& t = rt ? *rt : *ds;
+    float c[4];
+    Color(color, c);
+    glClearColor(c[0], c[1], c[2], c[3]);
+    glClearDepthf(z);
+    glClearStencil(GLint(stencil));
+    GLbitfield bits = 0;
+    if (flags & kClearTarget) bits |= GL_COLOR_BUFFER_BIT;
+    if (flags & kClearZ) bits |= GL_DEPTH_BUFFER_BIT;
+    if (flags & kClearStencil) bits |= GL_STENCIL_BUFFER_BIT;
+    // the console's rectangles are in console pixels, the target may be bigger
+    float sc = float(t.w) / float(t.gw ? t.gw : t.w);
+    uint32_t n = count && rects ? count : 1;
+    uint32_t saved[4] = {32, 32, 32, 32};
+    if (count && rects) {
+        glGetIntegerv(GL_SCISSOR_BOX, reinterpret_cast<GLint*>(saved));
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, GLsizei(t.w), GLsizei(t.h));
+        glClear(bits);
+        for (uint32_t i = 0; i < n; i++) {
+            GuestRect r = ReadGuestRect(uint32_t(reinterpret_cast<uintptr_t>(rects)), i);
+            int32_t x0 = int32_t(std::lround(r.left * sc)), y0 = int32_t(std::lround(r.top * sc));
+            int32_t x1 = int32_t(std::lround(r.right * sc)), y1 = int32_t(std::lround(r.bottom * sc));
+            if (x1 <= x0 || y1 <= y0) continue;
+            glScissor(x0, GLint(t.h) - y1, x1 - x0, y1 - y0);
+            glClear(bits);
+        }
+        glScissor(GLint(saved[0]), GLint(saved[1]), GLsizei(saved[2]), GLsizei(saved[3]));
+        glDisable(GL_SCISSOR_TEST);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+        glClear(bits);
+    }
+    RememberDrawn(rt, ds);
+}
+
+void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
+    Assembled& a = asm_;
+    if (!Assemble(s, prim, start, count, indices, a)) return;
+    Target* rt = EnsureTarget(s.rt, false);
+    Target* ds = s.rs[kRsZEnable] || s.rs[kRsStencilEnable] ? EnsureTarget(s.zs, true) : nullptr;
+    if (rt && ds && (rt->w != ds->w || rt->h != ds->h)) ds = nullptr;
+    if (!rt && !ds) return;
+    Target& screen = rt ? *rt : *ds;
+    GuestExtent size;
+    SurfaceSize(rt ? s.rt : s.zs, size.w, size.h);
+
+    DrawShaders sh = ClassifyShaders(s, a, count);
+    if (sh.prog) EnsureProgramHash(s);
+    sh.vkey = VertexKey(s, a, sh);
+    std::string vs = VertexHlsl(s, a, sh);
+    const char* entry = "main";
+    if (sh.quad) vs = QuadHlsl(std::move(vs));
+    if (a.topology == Topology::Points) {
+        std::string points = PointsHlsl(vs);
+        if (!points.empty()) {
+            vs = std::move(points);
+            entry = "main_points";
+        }
+    }
+    sh.vh = Module(vs, glsl::Stage::Vertex, entry);
+    DrawTextures stages;
+    if (!BindStageTextures(s, stages)) return;
+    PixelKey pk = MakePixelKey(s, stages.info);
+    pk.quad = sh.quad;
+    sh.pkey = Hash(&pk, sizeof(pk));
+    sh.ph = Module(PixelHlsl(pk), glsl::Stage::Pixel, "main");
+    if (!sh.vh || !sh.ph) return;
+    Program* prog = EnsureProgram(sh.vh, sh.ph);
+    if (!prog) return;
+
+    DrawConstants c{};
+    FillSurfaceConstants(s, size, c);
+    if (a.topology == Topology::Points) c.surf[3] = float(screen.w) / float(screen.gw ? screen.gw : screen.w);
+    FillFogConstants(s, sh.prog, c);
+    FillCombinerConstants(s, c);
+    // a render target read by the console's own vertex path sits half a host texel off, as in the Vulkan backend
+    bool offset = !sh.prog || ReadsViewportOffset(s.vs->program);
+    float target_shift = offset ? -0.5f * (float(screen.w) / float(screen.gw ? screen.gw : screen.w)) : 0.0f;
+    FillTextureConstants(s, sh, target_shift, stages, c);
+    if (sh.fixed_transform) {
+        FillTransformConstants(s, size, c);
+        FillLightConstants(s, sh.fk, c);
+    }
+    c.zparams[3] = 0;
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_[0]);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(s.vsc), s.vsc.data());
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_[1]);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(c), &c);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    // the console's vertices arrive as float4 registers packed one after another, which is one attribute each
+    uint32_t stride = 0, regs = 0;
+    uint32_t locations[16] = {}, offsets[16] = {};
+    for (uint32_t r = 0; r < 16; r++) {
+        if (!((a.regs >> r) & 1)) continue;
+        locations[regs] = r;
+        offsets[regs] = stride;
+        stride += 16;
+        regs++;
+    }
+    if (!regs || a.vertex_count == 0) return;
+    size_t vbytes = size_t(a.vertex_count) * stride;
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    if (vbytes > vbo_size_) {
+        vbo_size_ = std::max(vbytes, size_t(1) << 16);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbo_size_), nullptr, GL_DYNAMIC_DRAW);
+    }
+    glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), a.vertices.data());
+    for (uint32_t i = 0; i < regs; i++) {
+        glEnableVertexAttribArray(locations[i]);
+        glVertexAttribPointer(locations[i], 4, GL_FLOAT, GL_FALSE, GLsizei(stride),
+                              reinterpret_cast<const void*>(uintptr_t(offsets[i] + a.base_vertex * stride)));
+    }
+    uint32_t drawn = a.index_count ? a.index_count : a.draw_count;
+    GLenum mode = a.topology == Topology::Points ? GL_POINTS
+                  : a.topology == Topology::Lines ? (a.strip ? GL_LINE_STRIP : GL_LINES)
+                                                  : (a.strip ? GL_TRIANGLE_STRIP : GL_TRIANGLES);
+
+    Bind(rt, ds);
+    RememberDrawn(rt, ds);
+    glUseProgram(prog->id);
+    // the console counts the viewport's pixels from the top of its target and GL counts them from the bottom of the
+    // window: y is turned over for both the viewport and the scissor, the x edges are the same
+    int32_t h32 = int32_t(screen.h);
+    float sc = float(screen.w) / float(size.w);
+    int32_t vx0 = int32_t(s.viewport.x * sc), vy0 = int32_t(s.viewport.y * sc);
+    int32_t vx1 = int32_t((s.viewport.x + s.viewport.w) * sc), vy1 = int32_t((s.viewport.y + s.viewport.h) * sc);
+    int32_t x0 = vx0, y0 = vy0, x1 = vx1, y1 = vy1;
+    if (s.scissor_count) {
+        x0 = std::max(x0, int32_t(s.scissors[0] * sc));
+        y0 = std::max(y0, int32_t(s.scissors[1] * sc));
+        x1 = std::min(x1, int32_t(s.scissors[2] * sc));
+        y1 = std::min(y1, int32_t(s.scissors[3] * sc));
+    }
+    vx0 = std::clamp(vx0, 0, int32_t(screen.w));
+    vy0 = std::clamp(vy0, 0, h32);
+    vx1 = std::clamp(vx1, 0, int32_t(screen.w));
+    vy1 = std::clamp(vy1, 0, h32);
+    if (vx1 <= vx0 || vy1 <= vy0) return;
+    glViewport(vx0, h32 - vy1, vx1 - vx0, vy1 - vy0);
+    x0 = std::clamp(x0, 0, int32_t(screen.w));
+    y0 = std::clamp(y0, 0, h32);
+    x1 = std::clamp(x1, 0, int32_t(screen.w));
+    y1 = std::clamp(y1, 0, h32);
+    if (x1 <= x0 || y1 <= y0) return;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x0, h32 - y1, x1 - x0, y1 - y0);
+
+    // blending: the same factors on the alpha channel as on the colour, which is what the Vulkan backend binds
+    bool blend = SimpleState(s, kMBlendEnable) != 0;
+    if (blend) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GLenum(Blend(SimpleState(s, kMSrcBlend), false)), GLenum(Blend(SimpleState(s, kMDestBlend), false)));
+        glBlendEquation(GLenum(BlendOp(SimpleState(s, kMBlendOp))));
+    } else {
+        glDisable(GL_BLEND);
+    }
+    // which channels the draw may write: the console's four bits, in the order Vulkan's colour components take them
+    uint32_t cw = SimpleState(s, kMColorWriteEnable);
+    uint32_t wmask = ((cw >> 16) & 1) | ((cw >> 8) & 1) << 1 | (cw & 1) << 2 | ((cw >> 24) & 1) << 3;
+    glColorMask(wmask & 1, ( wmask >> 1) & 1, (wmask >> 2) & 1, (wmask >> 3) & 1);
+    // the console's depth bias on the polygons it asks it for: GL's units are a depth buffer step, the console's are
+    // 24 bit fractions of the range, and this renderer's depth range is the console's own
+    if (a.topology == Topology::Triangles && SimpleState(s, kMSolidOffsetEnable)) {
+        float units = Bits(SimpleState(s, kMDepthOffset)) * float(kDepth24Max);
+        float slope = Bits(SimpleState(s, kMSlopeScale));
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(slope, units);
+    } else {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+    // depth and stencil
+    if (s.rs[kRsZEnable]) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(Compare(SimpleState(s, kMZFunc)));
+        glDepthMask(SimpleState(s, kMZWriteEnable) ? GL_TRUE : GL_FALSE);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+    }
+    if (s.rs[kRsStencilEnable]) {
+        glEnable(GL_STENCIL_TEST);
+        glStencilFunc(Compare(SimpleState(s, kMStencilFunc)), GLint(SimpleState(s, kMStencilRef) & 0xFF),
+                      GLuint(SimpleState(s, kMStencilMask) & 0xFF));
+        glStencilMask(GLuint(SimpleState(s, kMStencilWriteMask) & 0xFF));
+        glStencilOp(GLenum(StencilOp(s.rs[kRsStencilFail])), GLenum(StencilOp(SimpleState(s, kMStencilZFail))),
+                    GLenum(StencilOp(SimpleState(s, kMStencilPass))));
+    } else {
+        glDisable(GL_STENCIL_TEST);
+    }
+    // culling: the console's winding as Vulkan's KeyRasterizer reads it
+    uint32_t cull = s.rs[kRsCullMode];
+    if (cull && a.topology == Topology::Triangles) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glFrontFace(cull == 0x900 ? GL_CCW : GL_CW);
+    } else {
+        glDisable(GL_CULL_FACE);
+    }
+    if (a.index_count) {
+        size_t ibytes = size_t(a.index_count) * (a.index16 ? 2 : 4);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
+        if (ibytes > ibo_size_) {
+            ibo_size_ = std::max(ibytes, size_t(1) << 16);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibo_size_), nullptr, GL_DYNAMIC_DRAW);
+        }
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), a.index_src);
+        glDrawElements(mode, GLsizei(drawn), a.index16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
+    } else {
+        glDrawArrays(mode, 0, GLsizei(drawn));
+    }
+    (void)prim;
+    (void)count;
+}
+
+void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) {
+    Target* from = FindTarget(mem::VirtualFromPhysical(src.data), false);
+    if (!from || !from->drawn) {
+        // pixels the CPU made: the copy happens in memory, as the Vulkan backend does
+        if (!CopySurfaceMemory(src, dst, count, src_rects, dst_points)) LOG_FIRST(8, "gl: CopyRects skipped");
+        return;
+    }
+    Target* to = EnsureTarget(dst, false);
+    if (!to || to == from) return;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, from->fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, to->fbo);
+    uint32_t n = count && src_rects ? count : 1;
+    float sc = float(to->w) / float(to->gw ? to->gw : to->w);
+    for (uint32_t i = 0; i < n; i++) {
+        int32_t l = 0, t = 0, r = int32_t(std::min(from->w, to->w)), b = int32_t(std::min(from->h, to->h));
+        int32_t dx = 0, dy = 0;
+        if (count && src_rects) {
+            GuestRect g = ReadGuestRect(src_rects, i);
+            l = int32_t(ScaleUnsigned(g.left, sc));
+            t = int32_t(ScaleUnsigned(g.top, sc));
+            r = int32_t(std::min(ScaleUnsigned(g.right, sc), from->w));
+            b = int32_t(std::min(ScaleUnsigned(g.bottom, sc), from->h));
+            dx = l;
+            dy = t;
+            if (dst_points) {
+                int32_t px = 0, py = 0;
+                ReadGuestPoint(dst_points, i, px, py);
+                dx = int32_t(ScaleUnsigned(px, sc));
+                dy = int32_t(ScaleUnsigned(py, sc));
+            }
+        }
+        if (r <= l || b <= t || dx >= int32_t(to->w) || dy >= int32_t(to->h)) continue;
+        r = std::min(r, l + int32_t(to->w) - dx);
+        b = std::min(b, t + int32_t(to->h) - dy);
+        int32_t fh = int32_t(from->h), th = int32_t(to->h), hgt = b - t;
+        glBlitFramebuffer(l, fh - b, r, fh - t, dx, th - dy - hgt, dx + (r - l), th - dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    to->drawn = true;
+}
+
+// ---- present and read-back
+
+void GlesBackend::Present(const Surface& front) {
+    host::WaitForeground();
+    Target* t = EnsureTarget(front, false);
+    int win_w = 0, win_h = 0;
+    host::WindowPixels(win_w, win_h);
+    if (win_w > 0 && win_h > 0) {
+        window_w_ = uint32_t(win_w);
+        window_h_ = uint32_t(win_h);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, GLsizei(std::max(window_w_, 1u)), GLsizei(std::max(window_h_, 1u)));
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (t) {
+        if (gamma_ && !ramp_.empty()) {
+            std::vector<uint8_t> px(256 * 4);
+            for (int i = 0; i < 256; i++) {
+                px[size_t(i) * 4 + 0] = ramp_[size_t(i)];
+                px[size_t(i) * 4 + 1] = ramp_[256 + size_t(i)];
+                px[size_t(i) * 4 + 2] = ramp_[512 + size_t(i)];
+                px[size_t(i) * 4 + 3] = 255;
+            }
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, lut_);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        }
+        glUseProgram(present_);
+        if (gamma_loc_ >= 0) glUniform1i(gamma_loc_, gamma_ ? 1 : 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, t->img.tex);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, lut_);
+        glBindVertexArray(vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    {
+        std::lock_guard lock(app::UiLock());
+        ImGui_ImplOpenGL3_NewFrame();
+        ui::NewFrame(float(window_w_), float(window_h_));
+        ImGui::NewFrame();
+        if (app::kGame.ui) app::kGame.ui(0.0);
+        touch::Draw();
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
+    SDL_GL_SwapWindow(host::Window());
+    presents_++;
+}
+
+bool GlesBackend::Readback(Target& t, std::vector<uint8_t>& px) {
+    uint32_t w = t.gw, h = t.gh;
+    GLuint fbo = t.fbo;
+    if (t.w != w || t.h != h) {
+        // a target drawn at the render scale: the game wants it at the console's size
+        if (!scratch_fbo_) {
+            glGenTextures(1, &scratch_);
+            glGenFramebuffers(1, &scratch_fbo_);
+        }
+        if (scratch_w_ < w || scratch_h_ < h) {
+            scratch_w_ = std::max(scratch_w_, w);
+            scratch_h_ = std::max(scratch_h_, h);
+            glBindTexture(GL_TEXTURE_2D, scratch_);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GLsizei(scratch_w_), GLsizei(scratch_h_), 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, nullptr);
+        }
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scratch_fbo_);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, scratch_, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, t.fbo);
+        glBlitFramebuffer(0, 0, GLint(t.w), GLint(t.h), 0, 0, GLint(w), GLint(h), GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        fbo = scratch_fbo_;
+    }
+    px.assign(size_t(w) * h * 4, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    return true;
+}
+
+void GlesBackend::Sync(uint32_t data, uint32_t) {
+    uint32_t va = mem::VirtualFromPhysical(data);
+    Target* t = FindTarget(va, false);
+    if (!t || !t->drawn) return;
+    glFinish();
+    std::vector<uint8_t> px;
+    if (!Readback(*t, px)) return;
+    uint8_t* guest = static_cast<uint8_t*>(kernel::HostPtr(t->data));
+    if (!guest) return;
+    uint32_t pitch = GuestPitch(t->gw);
+    for (uint32_t y = 0; y < t->gh; y++) {
+        const uint8_t* in = &px[size_t(y) * t->gw * 4];
+        uint8_t* out = guest + size_t(y) * pitch;
+        for (uint32_t x = 0; x < t->gw; x++) {
+            out[size_t(x) * 4 + 0] = in[size_t(x) * 4 + 2];
+            out[size_t(x) * 4 + 1] = in[size_t(x) * 4 + 1];
+            out[size_t(x) * 4 + 2] = in[size_t(x) * 4 + 0];
+            out[size_t(x) * 4 + 3] = in[size_t(x) * 4 + 3];
+        }
+    }
+    t->read = std::move(px);
+    t->drawn = false;
+    t->sig = MemSig(t->data, t->bytes);
+    t->epoch = DirtyEpoch(t->data);
+}
+
+void GlesBackend::SetGamma(const uint8_t* ramp) {
+    bool identity = true;
+    for (int i = 0; i < 256 && identity; i++) identity = ramp[i] == i && ramp[256 + i] == i && ramp[512 + i] == i;
+    ramp_.assign(ramp, ramp + 256 * 3);
+    gamma_ = !identity;
+}
+
+void GlesBackend::Report(const char* what) {
+    LOGI("gl: %s -- %llu presents, %u targets, %u texture uploads, %u programs built, %zd programs, %zd textures", what,
+         (unsigned long long)presents_, drawn_targets_, uploaded_textures_, programs_built_, programs_.size(),
+         textures_.size());
+}
+
+GlesBackend* g_gles = nullptr;
+
+}  // namespace
+
+std::unique_ptr<gpu::Backend> CreateGlesBackend() {
+    auto backend = std::make_unique<GlesBackend>();
+    g_gles = backend.get();
+    return backend;
+}
+
+namespace gpu {
+void GlesGraphicsReport() {
+    if (g_gles) g_gles->Report("the GL ES renderer");
+}
+std::string GlesGraphicsInfo() { return g_gles ? "OpenGL ES 3.0, " + g_gles->Name() : std::string("no renderer"); }
+}  // namespace gpu

@@ -57,6 +57,40 @@ bool StripNoperspective(std::string& s) {
     return lost;
 }
 
+// the console's depth leaves its shaders as [0,1] and GL's clip space wants [-1,1]: a gl_Position write is wrapped so z
+// becomes 2z - w, which is the same depth after the divide. Without it every clear, every depth test against the game's
+// own cleared depth and every shadow map comparison would be in another scale than the one the game wrote.
+void RemapDepth(std::string& s) {
+    const std::string key = "gl_Position = ";
+    std::string out;
+    size_t at = 0;
+    bool wrapped = false;
+    for (size_t pos; (pos = s.find(key, at)) != std::string::npos;) {
+        size_t i = pos + key.size();
+        int nest = 0;
+        while (i < s.size()) {
+            char ch = s[i];
+            if (ch == '(' || ch == '[') nest++;
+            else if (ch == ')' || ch == ']') nest--;
+            else if (ch == ';' && nest <= 0) break;
+            i++;
+        }
+        if (i >= s.size()) break;
+        out += s.substr(at, pos - at);
+        out += "gl_Position = port_depth(" + s.substr(pos + key.size(), i - (pos + key.size())) + ")";
+        at = i;  // the ; is left where it was
+        wrapped = true;
+    }
+    out += s.substr(at);
+    s = std::move(out);
+    if (!wrapped) return;
+    size_t version = s.find("#version");
+    size_t end = version == std::string::npos ? std::string::npos : s.find('\n', version);
+    // highp is spelled out, so the helper holds wherever the shader's own precision statements sit
+    std::string helper = "vec4 port_depth(highp vec4 p) { p.z = p.z * 2.0 - p.w; return p; }\n";
+    s.insert(end == std::string::npos ? 0 : end + 1, helper);
+}
+
 }  // namespace
 
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::string& out,
@@ -96,6 +130,7 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
         return false;
     }
     StripBlockBindings(out);
+    if (stage == Stage::Vertex) RemapDepth(out);
     if (StripNoperspective(out)) LOGI("gl: %s: noperspective interpolation is not in GL ES 3.00, smoothed", entry);
     return true;
 }

@@ -219,27 +219,39 @@ Checked against the other Android ports built on the same SDK, so the work is no
 That leaves the vendor's shader compiler, and nothing in the port can be pointed at it from here. What a port *can* do
 is stop feeding it the construct it miscompiles -- which needs to be identified on a device that has it, not guessed at.
 
-## The OpenGL ES renderer (in progress)
+## The OpenGL ES renderer
 
-A second backend is being added for the phones whose Vulkan driver draws the picture wrong. Its reason is narrow and
-worth writing down: on a Mali-G57 the same game files, the same render targets and the same SPIR-V come out deformed,
-while GL ES is a different driver front end on the same silicon, and the shaders reach it through SPIRV-Cross rather
-than the driver's Vulkan compiler.
+A second backend, for the phones whose Vulkan driver draws the picture wrong. Its reason is narrow and worth writing
+down: on a Mali-G57 the same game files, the same render targets and the same SPIR-V come out deformed, while GL ES is a
+different driver front end on the same silicon, and the shaders reach it through SPIRV-Cross rather than the driver's
+Vulkan compiler. **Vulkan stays the default**; the switch is one row in the port menu.
 
-What is in place:
+Where it lives:
 
 * `native/glsl.cpp` -- the port's HLSL through glslang, out of SPIR-V through SPIRV-Cross as **GLSL ES 3.00**, with the
-  layout bindings GL ES 3.00 has no syntax for stripped and the uniform blocks bound by name afterwards, and the
-  separate texture/sampler bindings turned into one combined sampler per stage. Checked against the port's own generated
-  shaders (vertex, fixed function pixel, a pixel shader sampling a shadow map, a screen quad): all four are valid ES
-  3.00 as glslang itself parses them.
+  layout bindings GL ES 3.00 has no syntax for stripped and the uniform blocks bound by name afterwards, the separate
+  texture/sampler bindings turned into one combined sampler per stage, and a vertex shader's depth remapped from the
+  console's `[0,1]` clip range to GL's `[-1,1]` so every clear, depth test and shadow comparison stays in the game's
+  own scale.
 * `native/draw_common.h` -- the constants, keys and CPU-side helpers a draw needs, copied **verbatim** from the Vulkan
   backend. The two renderers must compute the same numbers, so the second one does not get its own version of them.
-* SPIRV-Cross is fetched by `android/CMakeLists.txt` the same way glslang is, and builds for arm64.
+* `native/gles.cpp` -- the backend: EGL through SDL, one framebuffer per render target (colour and `D24S8` depth), the
+  CPU-assembled float4 vertices in one buffer per draw, GL ES sampler state per stage, read-back into guest memory, the
+  present pass with the console's gamma ramp, and the ImGui overlay. GL ES 3.00 has no negative-height viewport, so the
+  window's orientation is handled where Vulkan handles it with a flipped viewport: in the vertex shader's Y and in the
+  present pass.
 
-What is still to come: the backend itself (`native/gles.cpp`: EGL window, targets, textures, the draw path, present and
-read-back), the `RENDERER` row in the port menu, and choosing the window's graphics API before it is created. Vulkan
-stays the default; GL ES will be a switch, and an option the port can pick by itself on a GPU it knows draws badly.
+What it deliberately does not do, and why the picture may differ from Vulkan's:
+
+* it draws at the console's own size (no render scale), because the game's shaders assume a target texel is a game
+  texel; the present pass stretches the frame over the phone's screen,
+* the glow composite is skipped, and a stage that names a cube map or a volume texture is read from its first level as
+  a flat texture (both once-per-run log lines),
+* the widescreen 2D squeeze (`WIDESCREEN`) is not applied.
+
+The `RENDERER` row is in the port menu under graphics (`settings.toml`: `renderer`, 0 Vulkan, 1 OpenGL ES) and takes
+effect on the next start, because the window's graphics API has to be chosen before the window exists. If the driver
+gives no GL ES 3.0 context the port says so in the log and runs Vulkan for that session.
 
 ## Credits and licences
 
