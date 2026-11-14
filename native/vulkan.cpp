@@ -2652,6 +2652,7 @@ std::string VulkanBackend::Info() const {
         "sync: %s, asked Vulkan %u.%u\ndynamic rendering: %s\n"
         "depth: %s, BC %d, ASTC %d, ETC2 %d\n"
         "draw scale: %.2f (%u%%%s), HD 3D world %s\n"
+        "vertex fetch: %s\n"
         "swapchain: %ux%u %s\n"
         "textures: %u live, %.1f MB, %u decoded by the CPU\n"
         "draws %llu: %llu points, %llu point sprites, %llu target reads\n"
@@ -2661,6 +2662,7 @@ std::string VulkanBackend::Info() const {
         VK_API_VERSION_MAJOR(asked_api_), VK_API_VERSION_MINOR(asked_api_), dynamic_ ? "on" : "off (render passes)", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
         caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2, scale_,
         app::Get().render_percent, port::g_dynamic_res ? " dynamic" : "", shadow::g_hd_scene ? "on" : "off",
+        gpu::g_raw_vertices ? "the guest's buffers" : "converted on the CPU",
         swap_extent_.width, swap_extent_.height, fmt, uint32_t(textures_.size()), double(tex_bytes) / 1048576.0,
         decoded, (unsigned long long)diag_draws_, (unsigned long long)diag_points_,
         (unsigned long long)diag_sprites_, (unsigned long long)diag_feedback_, fps_);
@@ -3529,6 +3531,14 @@ void VulkanBackend::ReleaseOldTextures() {
 }
 
 void VulkanBackend::ApplySettings() {
+    // safe graphics converts every vertex here instead of letting the driver read the guest's formats: a driver that
+    // gets an element wrong out of a stride draws a model stretched over the screen, and this is the one switch that
+    // takes the driver out of the vertex path altogether
+    bool keep_raw = !port::g_safe_graphics;
+    if (keep_raw != gpu::g_raw_vertices) {
+        gpu::g_raw_vertices = keep_raw;
+        LOGI("vulkan: vertex fetch %s", keep_raw ? "straight from the guest's buffers" : "converted on the CPU");
+    }
     // safe graphics: the frame is drawn at the console's own size, so none of the scale paths run at all
     float want = port::g_safe_graphics ? 1.0f : app::RenderScale(guest_h_);
     bool hd = shadow::g_hd_scene && !port::g_safe_graphics;

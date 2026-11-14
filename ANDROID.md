@@ -65,6 +65,9 @@ Everything the PC build has, in a phone's shape:
   own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
   reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,
   and a texture unpacked wrongly is what smears and checkerboards look like.
+* **Vertex fetch**: with safe graphics on, every vertex is converted to float4 on the CPU and the driver fetches no host
+  formats at all. Safe graphics off restores the faster path, where the guest's own buffers are read by the GPU - which is
+  also the path a driver can get wrong, and a model drawn stretched over the screen is what that looks like.
 * **Safe graphics**: on by default, and one toggle on the GRAPHICS page for a phone whose picture comes out wrong. Applied as it is
   pressed: the frame is drawn at the console's own size (no render resolution, no HD scene), the glow composite and the
   extra upscale taps are skipped, dynamic resolution stands still and DXT is unpacked here instead of in the driver. It

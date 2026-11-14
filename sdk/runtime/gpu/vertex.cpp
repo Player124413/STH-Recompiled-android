@@ -15,6 +15,14 @@
 
 namespace gpu {
 
+// the guest's own vertices read by the GPU where every element can be, or every vertex converted to float4 on the CPU.
+// Set from the Android port's safe graphics: a driver that reads a vertex element out of a stride wrongly is then told
+// none of them.
+#ifndef XBE_RAW_VERTICES
+#define XBE_RAW_VERTICES 1
+#endif
+bool g_raw_vertices = XBE_RAW_VERTICES != 0;
+
 namespace {
 
 constexpr uint32_t kTypeFloat2H = 0x72;  // FLOAT2H
@@ -84,8 +92,6 @@ void Convert(uint32_t type, const uint8_t* p, float* o) {
 #ifndef XBE_RAW_VERTICES
 #define XBE_RAW_VERTICES 1
 #endif
-constexpr bool kRawVertices = XBE_RAW_VERTICES;
-
 // D3DVSDT type as the input assembler reads it: DXGI format, what the vertex shader does after, bytes the format reads
 struct HostElement {
     uint8_t format = 0;
@@ -472,7 +478,7 @@ bool Assemble(const State& s, uint32_t prim, uint32_t start, uint32_t count, con
     Inputs inputs = {*layout, regs, nregs};
 
     // the guest's own vertices when the input assembler can read every element of them
-    bool raw = kRawVertices && RawReadable(s, inputs);
+    bool raw = g_raw_vertices && RawReadable(s, inputs);
     if (raw) return AssembleRaw(s, inputs, d, out);
     return AssembleConverted(s, inputs, d, out);
 }

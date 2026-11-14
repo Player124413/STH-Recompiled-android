@@ -33,6 +33,8 @@ struct VertexElement {
 };
 
 // one draw's vertices and indices as the input assembler takes them
+extern bool g_raw_vertices;  // false: every vertex converted to float4 on the CPU, the GPU fetches no host formats
+
 struct Assembled {
     std::vector<float> vertices;    // converted path: vertex_count * regs * 4
     std::vector<uint32_t> indices;  // converted path, or the list rebuilt for fans, quads and loops
