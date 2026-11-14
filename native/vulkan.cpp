@@ -1054,6 +1054,7 @@ private:
     PFN_vkWaitSemaphoresKHR wait_semaphores_ = nullptr;
     PFN_vkGetSemaphoreCounterValueKHR counter_value_ = nullptr;
     bool dynamic_ = true;  // dynamic rendering; Vulkan 1.1 drivers (older Adrenos) only have render passes
+    bool strict_sync_ = false;  // GPU SYNC = STRICT: the CPU stops at every submit, whatever the driver does with fences
     VkDeviceSize ubo_align_ = kUboAlign;  // what the device asks of a uniform buffer offset, used for the ring
     bool timeline_ok_ = true;  // without it a fence per submit stands in for the timeline's values
     struct Pending {
@@ -1177,6 +1178,7 @@ bool VulkanBackend::CreateInstance() {
     // semaphores -- is one that has drawn a frame wrong on a phone that reports 1.3. Taking the newer version only when
     // DYNAMIC RENDERING = ON or GPU SYNC = TIMELINE is what the file says keeps those paths reachable for a comparison.
     bool newer = port::g_dynamic_rendering == 1 || port::g_timeline_semaphores == 1;
+    strict_sync_ = port::g_timeline_semaphores == 3;
     asked_api_ = newer ? std::min<uint32_t>(loader, VK_API_VERSION_1_3) : std::min<uint32_t>(loader, VK_API_VERSION_1_1);
     ai.apiVersion = asked_api_;
     if (!newer) LOGR("vulkan: asking for Vulkan %u.%u (the port's own level)", VK_API_VERSION_MAJOR(asked_api_),
@@ -1841,6 +1843,9 @@ void VulkanBackend::Submit(bool wait, bool present) {
     }
     if (r != VK_SUCCESS)
         LOGE("vulkan: submit %llu%s failed (%d)", (unsigned long long)signal, present ? " (present)" : "", int(r));
+    // STRICT: nothing of this submit is left for the GPU to finish later, so a frame that is still wrong here is wrong
+    // in what the port asked for, not in when the driver got to it
+    if (strict_sync_) vkQueueWaitIdle(queue_);
     f.value = signal;
     if (wait) {
         ResetFrame(f);

@@ -50,7 +50,9 @@ Everything the PC build has, in a phone's shape:
   phone that reports 1.3.
 * **GPU sync**: timeline semaphores where the driver has them, fences where it does not, and on ARM Mali fences by
   default — the phone whose picture is right runs render passes *and* fences, so the port matches it on both counts.
-  GRAPHICS → GPU SYNC switches AUTOMATIC, TIMELINE and FENCES, taken at the next start. On that Mali driver the
+  GRAPHICS → GPU SYNC switches AUTOMATIC, TIMELINE, FENCES and STRICT, taken at the next start. STRICT stops the CPU at
+  every submit: a frame still wrong under it is wrong in what the port asked the GPU to draw, not in when the driver got
+  round to it, which is how a sync hole is told apart from bad geometry data. On that Mali driver the
   timeline path was the bug behind a scene with no geometry in it: the "the GPU is past this" value came back wrong, the
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame

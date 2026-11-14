@@ -250,6 +250,7 @@ const char* SyncName() {
     switch (port::g_timeline_semaphores) {
         case 1: return "TIMELINE";
         case 0: return "FENCES";
+        case 3: return "STRICT (SLOW)";
         default: return "AUTOMATIC (FENCES)";
     }
 }
@@ -272,7 +273,7 @@ void GraphicsPage() {
         LOGI("port: safe graphics %s", port::g_safe_graphics ? "on" : "off");
     }
     if (Row("GPU SYNC", SyncName(), IM_COL32(240, 120, 110, 255), true)) {
-        port::g_timeline_semaphores = (port::g_timeline_semaphores + 1) % 3;  // automatic -> timeline -> fences
+        port::g_timeline_semaphores = (port::g_timeline_semaphores + 1) % 4;  // automatic -> timeline -> fences -> strict
         Save();
         LOGI("port: gpu sync %s, takes effect on the next start", SyncName());
     }
