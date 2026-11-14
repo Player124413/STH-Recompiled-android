@@ -91,18 +91,15 @@ GLenum Wrap(uint32_t v) {
     }
 }
 
-// the console's depth comparison, D3DCMPFUNC 1..8, as GL ES names the same eight
+// the console's depth comparison as GL ES names the same eight: the render states hold D3DCMP_NEVER 0x200 to
+// D3DCMP_ALWAYS 0x207, in the order GL keeps them, and this used to read them as 1..8, which turned every compare
+// into "always" -- depth, stencil and the shadow sampler's compare all pass whatever is in the buffer
 GLenum Compare(uint32_t v) {
-    switch (v) {
-    case 1: return GL_NEVER;
-    case 2: return GL_LESS;
-    case 3: return GL_EQUAL;
-    case 4: return GL_LEQUAL;
-    case 5: return GL_GREATER;
-    case 6: return GL_NOTEQUAL;
-    case 7: return GL_GEQUAL;
-    default: return GL_ALWAYS;
-    }
+    static const GLenum kCompare[8] = {GL_NEVER,  GL_LESS,    GL_EQUAL,  GL_LEQUAL,
+                                       GL_GREATER, GL_NOTEQUAL, GL_GEQUAL, GL_ALWAYS};
+    if (v >= 0x200 && v <= 0x207) return kCompare[v - 0x200];
+    if (v >= 1 && v <= 8) return kCompare[v - 1];  // the same eight without the 0x200, as some callers pass them
+    return GL_ALWAYS;
 }
 
 GLenum MinFilter(uint32_t min, uint32_t mip, bool mipmapped, bool linearable) {
@@ -193,6 +190,7 @@ class GlesBackend final : public Backend {
   private:
     bool Ready();  // the context, made on the first call and brought to the thread that draws
     bool Start(SDL_Window* window);
+    bool SelfTest();  // one triangle of this file's own, to tell "GL draws" from "the port's draws come out empty"
     // resources
     Target* FindTarget(uint32_t data, bool depth);
     Target* EnsureTarget(const Surface& s, bool depth);
@@ -243,10 +241,15 @@ class GlesBackend final : public Backend {
     uint32_t draw_fbo_ = 0, draw_rt_tex_ = 0, draw_ds_tex_ = 0;
     SDL_GLContext ctx_ = nullptr;  // made on the thread the draws run on
     bool start_failed_ = false;
+    int selftest_ = 0;  // 0 not run, 1 draws a pixel, 2 draws nothing
     std::string renderer_ = "?";   // the driver's name, for the graphics report
     std::string problem_;          // the first thing that went wrong with a shader or the driver, shown on the screen
     uint32_t draws_ = 0, issued_ = 0;
     int32_t last_vp_[4] = {};
+    uint32_t drawn_into_ = 0;  // the address of the target the last draw went into
+    int32_t drawn_size_[2] = {};
+    bool frame_black_ = false;   // the target this frame presents was read back and had no pixel in it
+    bool window_black_ = false;  // and so was the window after the present pass drew it
     double fps_ = 0;
     int fps_n_ = 0;
     std::chrono::steady_clock::time_point fps_t_ = std::chrono::steady_clock::now();
@@ -374,8 +377,100 @@ bool GlesBackend::Start(SDL_Window* window) {
         LOGE("gl: the overlay does not start");
         return false;
     }
-    LOGI("gl: %ux%u window, ready", window_w_, window_h_);
+    selftest_ = SelfTest() ? 1 : 2;
+    if (selftest_ == 2 && problem_.empty()) problem_ = "this driver does not draw the renderer's own triangle";
+    LOGI("gl: %ux%u window, ready, the renderer's own test %s", window_w_, window_h_,
+         selftest_ == 1 ? "draws a pixel" : "draws nothing");
     return true;
+}
+
+// One triangle with a shader this file writes itself, into a 4x4 texture: no port shader, no console state, no guest
+// memory. A pixel coming back out says GL itself draws here, so an empty frame is the port's draws and not the
+// framebuffer, the buffers or the swap.
+bool GlesBackend::SelfTest() {
+    const char* vs_src = R"(#version 300 es
+void main() {
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+    const char* fs_src = R"(#version 300 es
+precision highp float;
+out vec4 o;
+void main() { o = vec4(1.0, 0.0, 1.0, 1.0); }
+)";
+    auto compile = [](GLenum type, const char* text) {
+        GLuint sh = glCreateShader(type);
+        glShaderSource(sh, 1, &text, nullptr);
+        glCompileShader(sh);
+        GLint ok = 0;
+        glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512] = {};
+            glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+            LOGE("gl: the self test's shader does not compile: %s", log);
+            glDeleteShader(sh);
+            return GLuint(0);
+        }
+        return sh;
+    };
+    GLuint vsh = compile(GL_VERTEX_SHADER, vs_src), fsh = compile(GL_FRAGMENT_SHADER, fs_src);
+    if (!vsh || !fsh) return false;
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vsh);
+    glAttachShader(prog, fsh);
+    glLinkProgram(prog);
+    glDeleteShader(vsh);
+    glDeleteShader(fsh);
+    GLint linked = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[512] = {};
+        glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+        LOGE("gl: the self test's program does not link: %s", log);
+        glDeleteProgram(prog);
+        return false;
+    }
+    GLuint tex = 0, fbo = 0, vao = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    bool drew = false;
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glViewport(0, 0, 4, 4);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_CULL_FACE);
+        glColorMask(1, 1, 1, 1);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(prog);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        uint8_t px[4] = {0, 0, 0, 0};
+        glReadPixels(2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        drew = px[0] == 255 && px[2] == 255;
+        if (!drew) LOGE("gl: the self test drew %u,%u,%u,%u", px[0], px[1], px[2], px[3]);
+    } else {
+        LOGE("gl: the self test's framebuffer is incomplete (%04X)", glCheckFramebufferStatus(GL_FRAMEBUFFER));
+    }
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &tex);
+    glDeleteProgram(prog);
+    glBindVertexArray(vao_);
+    return drew;
 }
 
 // ---- targets and textures
@@ -976,30 +1071,23 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     glUseProgram(prog->id);
     // the console counts the viewport's pixels from the top of its target and GL counts them from the bottom of the
     // window: y is turned over for both the viewport and the scissor, the x edges are the same
-    int32_t h32 = int32_t(screen.h);
     float sc = float(screen.w) / float(size.w);
-    int32_t vx0 = int32_t(s.viewport.x * sc), vy0 = int32_t(s.viewport.y * sc);
-    int32_t vx1 = int32_t((s.viewport.x + s.viewport.w) * sc), vy1 = int32_t((s.viewport.y + s.viewport.h) * sc);
-    int32_t x0 = vx0, y0 = vy0, x1 = vx1, y1 = vy1;
+    glViewport(0, 0, GLsizei(screen.w), GLsizei(screen.h));
+    int32_t x0 = int32_t(s.viewport.x * sc), y0 = int32_t(s.viewport.y * sc);
+    int32_t x1 = int32_t((s.viewport.x + s.viewport.w) * sc), y1 = int32_t((s.viewport.y + s.viewport.h) * sc);
     if (s.scissor_count) {
         x0 = std::max(x0, int32_t(s.scissors[0] * sc));
         y0 = std::max(y0, int32_t(s.scissors[1] * sc));
         x1 = std::min(x1, int32_t(s.scissors[2] * sc));
         y1 = std::min(y1, int32_t(s.scissors[3] * sc));
     }
-    vx0 = std::clamp(vx0, 0, int32_t(screen.w));
-    vy0 = std::clamp(vy0, 0, h32);
-    vx1 = std::clamp(vx1, 0, int32_t(screen.w));
-    vy1 = std::clamp(vy1, 0, h32);
-    if (vx1 <= vx0 || vy1 <= vy0) return;
-    glViewport(vx0, h32 - vy1, vx1 - vx0, vy1 - vy0);
     x0 = std::clamp(x0, 0, int32_t(screen.w));
-    y0 = std::clamp(y0, 0, h32);
+    y0 = std::clamp(y0, 0, int32_t(screen.h));
     x1 = std::clamp(x1, 0, int32_t(screen.w));
-    y1 = std::clamp(y1, 0, h32);
+    y1 = std::clamp(y1, 0, int32_t(screen.h));
     if (x1 <= x0 || y1 <= y0) return;
     glEnable(GL_SCISSOR_TEST);
-    glScissor(x0, h32 - y1, x1 - x0, y1 - y0);
+    glScissor(x0, y0, x1 - x0, y1 - y0);
 
     // blending: the same factors on the alpha channel as on the colour, which is what the Vulkan backend binds
     bool blend = SimpleState(s, kMBlendEnable) != 0;
@@ -1053,10 +1141,13 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
         glDisable(GL_CULL_FACE);
     }
     issued_++;
-    last_vp_[0] = vx0;
-    last_vp_[1] = vy0;
-    last_vp_[2] = vx1 - vx0;
-    last_vp_[3] = vy1 - vy0;
+    last_vp_[0] = x0;
+    last_vp_[1] = y0;
+    last_vp_[2] = x1 - x0;
+    last_vp_[3] = y1 - y0;
+    drawn_into_ = screen.data;
+    drawn_size_[0] = int32_t(screen.w);
+    drawn_size_[1] = int32_t(screen.h);
     if (a.index_count) {
         size_t ibytes = size_t(a.index_count) * (index16 ? 2 : 4);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
@@ -1188,6 +1279,35 @@ void GlesBackend::Present(const Surface& front) {
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     CheckGl("the present pass");
+    if (t && presents_ % 60 == 0) {
+        // is the picture we are showing actually empty? a grid of texels off the same target answers it, and a black
+        // screen with nothing else to go on is exactly the question this renderer has been asked
+        bool any = false;
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, t->fbo);
+        for (int gy = 1; gy < 4 && !any; gy++)
+            for (int gx = 1; gx < 4 && !any; gx++) {
+                uint8_t px[4] = {0, 0, 0, 0};
+                glReadPixels(GLint(uint32_t(gx) * t->w / 4), GLint(uint32_t(gy) * t->h / 4), 1, 1, GL_RGBA,
+                             GL_UNSIGNED_BYTE, px);
+                any = px[0] | px[1] | px[2];
+            }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        frame_black_ = !any;
+        // and the window itself, which tells a frame of nothing from a present pass that draws nothing
+        bool window_any = false;
+        for (int gy = 1; gy < 4 && !window_any; gy++)
+            for (int gx = 1; gx < 4 && !window_any; gx++) {
+                uint8_t px[4] = {0, 0, 0, 0};
+                glReadPixels(GLint(uint32_t(gx) * window_w_ / 4), GLint(uint32_t(gy) * window_h_ / 4), 1, 1, GL_RGBA,
+                             GL_UNSIGNED_BYTE, px);
+                window_any = px[0] | px[1] | px[2];
+            }
+        window_black_ = !window_any;
+        if (frame_black_ || window_black_)
+            LOG_FIRST(3, "gl: black frame (%s%s) -- %u draws, %u issued, target %08X %ux%u, last drawn %08X %dx%d",
+                      frame_black_ ? "target empty" : "target has pixels", window_black_ ? ", window empty" : "",
+                      draws_, issued_, t->data, t->w, t->h, drawn_into_, drawn_size_[0], drawn_size_[1]);
+    }
     {
         std::lock_guard lock(app::UiLock());
         ImGui_ImplOpenGL3_NewFrame();
@@ -1199,6 +1319,8 @@ void GlesBackend::Present(const Surface& front) {
         // in a log the player would have to find: a shader the driver rejected, or a frame nothing was drawn into
         std::string banner = problem_;
         if (banner.empty() && draws_ == 0 && presents_ > 60) banner = "no draw has reached the screen yet";
+        if (banner.empty() && frame_black_ && presents_ > 120) banner = "the frame holds no pixel";
+        if (banner.empty() && window_black_ && presents_ > 120) banner = "the window holds no pixel";
         if (!banner.empty()) {
             ImGui::SetNextWindowPos(ImVec2(12, 96), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.75f);
@@ -1211,8 +1333,11 @@ void GlesBackend::Present(const Surface& front) {
             ImGui::PopStyleColor();
             ImGui::Text("%llu frames, %u draws, %u issued, %u programs, %u textures", (unsigned long long)presents_,
                         draws_, issued_, programs_built_, unsigned(textures_.size()));
-            if (issued_)
-                ImGui::Text("last viewport %d,%d %dx%d", last_vp_[0], last_vp_[1], last_vp_[2], last_vp_[3]);
+            if (issued_) ImGui::Text("scissor %d,%d %dx%d, drawn into %08X %dx%d", last_vp_[0], last_vp_[1],
+                                     last_vp_[2], last_vp_[3], drawn_into_, drawn_size_[0], drawn_size_[1]);
+            if (t)
+                ImGui::Text("showing %08X %ux%u%s", t->data, t->w, t->h, t->data == drawn_into_ ? " (drawn)" : "");
+            ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
             ImGui::End();
         }
         ImGui::Render();
