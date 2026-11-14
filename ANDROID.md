@@ -54,6 +54,10 @@ Everything the PC build has, in a phone's shape:
   with no scene in it. TIMELINE is still there to compare, at the next start.
 * **Dump frame**: GRAPHICS → DUMP FRAME AS PNG writes the frame's render targets into `dumps/` beside the settings, the
   largest first, so a picture that comes out wrong can be looked at pass by pass instead of guessed at from a screenshot.
+* **DXT is always decoded by the port**, never by the GPU: no phone this port has run on can decode BC, so the driver's
+  own path has never been seen to draw a correct picture, while the CPU decoder was checked texel by texel against a
+  reference one. A phone that offers BC (an RDNA2 based one does) would otherwise be the only device on untested code,
+  and a texture unpacked wrongly is what smears and checkerboards look like.
 * **Safe graphics**: one toggle on the GRAPHICS page for a phone whose picture comes out wrong, applied as it is
   pressed: the frame is drawn at the console's own size (no render resolution, no HD scene), the glow composite and the
   extra upscale taps are skipped, dynamic resolution stands still and DXT is unpacked here instead of in the driver. It

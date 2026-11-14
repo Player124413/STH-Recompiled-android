@@ -1306,7 +1306,12 @@ bool VulkanBackend::CreateDevice() {
     feats_.samplerAnisotropy = f2.features.samplerAnisotropy;
     feats_.fillModeNonSolid = f2.features.fillModeNonSolid;
     feats_.textureCompressionBC = f2.features.textureCompressionBC;
-    bc_ = feats_.textureCompressionBC;
+    // The GPU's own DXT decoder is never used, even on a device that offers one. No phone this port has been tried on
+    // can decode BC, so that path has never once been seen to draw a correct picture, while the CPU decoder was checked
+    // texel by texel against a reference decoder. A phone that does offer BC -- a RDNA2 based one does -- would
+    // otherwise be the only device running code nobody has looked at, and a texture unpacked wrongly is exactly what
+    // smears, checkerboards and coloured fringes look like.
+    bc_ = false;
     VkPhysicalDeviceFeatures2 on{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, chain()};
     on.features = feats_;
     dr.dynamicRendering = VK_TRUE;
