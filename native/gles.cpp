@@ -176,6 +176,7 @@ class GlesBackend final : public Backend {
     void Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) override;
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
+    void FrameStats(Target& t);
     void Sync(uint32_t data_va, uint32_t size) override;
     void SyncLate(uint32_t data_va) override { Sync(data_va, 0); }
     void Flush() override {
@@ -248,7 +249,10 @@ class GlesBackend final : public Backend {
     int32_t last_vp_[4] = {};
     uint32_t drawn_into_ = 0;  // the address of the target the last draw went into
     int32_t drawn_size_[2] = {};
-    bool frame_black_ = false;   // the target this frame presents was read back and had no pixel in it
+    bool frame_black_ = false;
+    unsigned frame_lit_ = 0;       // how much of the presented target is not black, in percent
+    int frame_mean_[3] = {};       // and the average of its colour
+    GLuint stats_fbo_ = 0, stats_tex_ = 0;  // a small copy of the target, for that average   // the target this frame presents was read back and had no pixel in it
     bool window_black_ = false;  // and so was the window after the present pass drew it
     double fps_ = 0;
     int fps_n_ = 0;
@@ -1211,6 +1215,41 @@ void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, u
 
 // ---- present and read-back
 
+// How much of the frame is not black, and how bright it is on average: an eight of the target through the blitter, so
+// a black screen can be told from a dark picture without reading a megabyte off the phone every frame
+void GlesBackend::FrameStats(Target& t) {
+    constexpr uint32_t kW = 80, kH = 60;
+    if (!stats_fbo_) {
+        glGenTextures(1, &stats_tex_);
+        glBindTexture(GL_TEXTURE_2D, stats_tex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GLsizei(kW), GLsizei(kH), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &stats_fbo_);
+        glBindFramebuffer(GL_FRAMEBUFFER, stats_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, stats_tex_, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, t.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, stats_fbo_);
+    glBlitFramebuffer(0, 0, GLint(t.w), GLint(t.h), 0, 0, GLint(kW), GLint(kH), GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, stats_fbo_);
+    static uint8_t px[kW * kH * 4];
+    glReadPixels(0, 0, GLint(kW), GLint(kH), GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    unsigned lit = 0;
+    uint64_t sum[3] = {0, 0, 0};
+    for (uint32_t i = 0; i < kW * kH; i++) {
+        const uint8_t* q = px + size_t(i) * 4;
+        if (q[0] > 8 || q[1] > 8 || q[2] > 8) lit++;
+        for (int c = 0; c < 3; c++) sum[c] += q[c];
+    }
+    frame_lit_ = lit * 100 / (kW * kH);
+    for (int c = 0; c < 3; c++) frame_mean_[c] = int(sum[c] / (kW * kH));
+    frame_black_ = lit == 0;
+}
+
 void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
     fps_n_++;
@@ -1280,20 +1319,11 @@ void GlesBackend::Present(const Surface& front) {
     }
     CheckGl("the present pass");
     if (t && presents_ % 60 == 0) {
-        // is the picture we are showing actually empty? a grid of texels off the same target answers it, and a black
-        // screen with nothing else to go on is exactly the question this renderer has been asked
-        bool any = false;
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, t->fbo);
-        for (int gy = 1; gy < 4 && !any; gy++)
-            for (int gx = 1; gx < 4 && !any; gx++) {
-                uint8_t px[4] = {0, 0, 0, 0};
-                glReadPixels(GLint(uint32_t(gx) * t->w / 4), GLint(uint32_t(gy) * t->h / 4), 1, 1, GL_RGBA,
-                             GL_UNSIGNED_BYTE, px);
-                any = px[0] | px[1] | px[2];
-            }
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        frame_black_ = !any;
-        // and the window itself, which tells a frame of nothing from a present pass that draws nothing
+        // is the picture we are showing actually empty? how much of the same target is not black answers it, and a
+        // black screen with nothing else to go on is exactly the question this renderer has been asked
+        FrameStats(*t);
+        // and the window itself: this reads black on drivers that do not answer for the window surface, so it says
+        // "the present pass drew nothing" only when the target holds a picture
         bool window_any = false;
         for (int gy = 1; gy < 4 && !window_any; gy++)
             for (int gx = 1; gx < 4 && !window_any; gx++) {
@@ -1319,8 +1349,11 @@ void GlesBackend::Present(const Surface& front) {
         // in a log the player would have to find: a shader the driver rejected, or a frame nothing was drawn into
         std::string banner = problem_;
         if (banner.empty() && draws_ == 0 && presents_ > 60) banner = "no draw has reached the screen yet";
-        if (banner.empty() && frame_black_ && presents_ > 120) banner = "the frame holds no pixel";
-        if (banner.empty() && window_black_ && presents_ > 120) banner = "the window holds no pixel";
+        if (banner.empty() && frame_black_ && presents_ > 120) banner = "the frame the game draws holds no pixel";
+        // a driver that does not answer for the window surface reports it empty whatever is on the screen, so this is
+        // only worth saying when the target has a picture to show and the screen still has none
+        if (banner.empty() && !frame_black_ && window_black_ && presents_ > 120)
+            banner = "the frame has a picture, the window has none: the present pass draws nothing";
         if (!banner.empty()) {
             ImGui::SetNextWindowPos(ImVec2(12, 96), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.75f);
@@ -1337,7 +1370,20 @@ void GlesBackend::Present(const Surface& front) {
                                      last_vp_[2], last_vp_[3], drawn_into_, drawn_size_[0], drawn_size_[1]);
             if (t)
                 ImGui::Text("showing %08X %ux%u%s", t->data, t->w, t->h, t->data == drawn_into_ ? " (drawn)" : "");
+            ImGui::Text("window %ux%u, frame %u%% lit, mean %d,%d,%d", window_w_, window_h_, frame_lit_, frame_mean_[0],
+                        frame_mean_[1], frame_mean_[2]);
+            // a gamma ramp the game set is applied on the way to the screen, so a ramp of zeros is a black screen with
+            // a full frame behind it: the ends of it are worth having on the screen too
+            ImGui::Text("gamma %s, ramp %d %d %d", gamma_ ? "on" : "off", ramp_.empty() ? -1 : int(ramp_[0]),
+                        ramp_.empty() ? -1 : int(ramp_[128]), ramp_.empty() ? -1 : int(ramp_[255]));
             ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
+            // the frame itself, drawn by the overlay: what the game put in the target is then in the screenshot
+            // whether or not the present pass gets it to the screen
+            if (t) {
+                ImGui::Text("the frame the game draws:");
+                ImGui::Image(ImTextureRef(ImTextureID(t->img.tex)), ImVec2(256.0f, 192.0f), ImVec2(0.0f, 1.0f),
+                             ImVec2(1.0f, 0.0f));
+            }
             ImGui::End();
         }
         ImGui::Render();
