@@ -437,6 +437,19 @@ Target* GlesBackend::EnsureTarget(const Surface& s, bool depth) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, t.img.tex, 0);
     else
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.img.tex, 0);
+    // a new target starts cleared, as the Vulkan backend's does: a depth texture the driver leaves at zero is a depth
+    // buffer where every fragment fails the depth test, and a picture of nothing is what comes out of that
+    glDisable(GL_SCISSOR_TEST);
+    if (depth) {
+        glDepthMask(GL_TRUE);
+        glClearDepthf(1.0f);
+        glClearStencil(0);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    } else {
+        glColorMask(1, 1, 1, 1);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     t.data = data;
     t.bytes = GuestPitch(gw) * gh;  // a console pixel is four bytes, depth and colour alike
@@ -718,6 +731,8 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
             levels = 1;
         }
         if (fi.depth && as_target) stages.info[i].shadow = ShadowDepthKind(d.format);
+        // a render target is read where the console's own pixel offset puts it, exactly as the Vulkan backend marks it
+        if (as_target) stages.info[i].flags |= kTexTarget;
         stages.info[i].kind = kTex2D;
         stages.levels[i] = levels;
         // a colour target sampled while the draw writes into it: GL leaves that undefined, so it is copied out first.
