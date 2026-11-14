@@ -439,7 +439,9 @@ void OpenMenu() {
     g_menu_open = true;
     g_start_press = NowMs() + 220;  // the game's own pause takes the START that opens our menu
     g_start_seen = false;
-    LOGI("menu: open");
+    // port 1 stays plugged for the game while this menu is up (native/game_info.cpp): saying otherwise used to make the
+    // title pause with its "Please reconnect the controller" message and leave the frame it was drawing on the screen
+    LOGI("menu: open, the pad stays plugged for the game");
 }
 
 void CloseMenu() {
