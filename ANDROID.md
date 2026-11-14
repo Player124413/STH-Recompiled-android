@@ -219,6 +219,28 @@ Checked against the other Android ports built on the same SDK, so the work is no
 That leaves the vendor's shader compiler, and nothing in the port can be pointed at it from here. What a port *can* do
 is stop feeding it the construct it miscompiles -- which needs to be identified on a device that has it, not guessed at.
 
+## The OpenGL ES renderer (in progress)
+
+A second backend is being added for the phones whose Vulkan driver draws the picture wrong. Its reason is narrow and
+worth writing down: on a Mali-G57 the same game files, the same render targets and the same SPIR-V come out deformed,
+while GL ES is a different driver front end on the same silicon, and the shaders reach it through SPIRV-Cross rather
+than the driver's Vulkan compiler.
+
+What is in place:
+
+* `native/glsl.cpp` -- the port's HLSL through glslang, out of SPIR-V through SPIRV-Cross as **GLSL ES 3.00**, with the
+  layout bindings GL ES 3.00 has no syntax for stripped and the uniform blocks bound by name afterwards, and the
+  separate texture/sampler bindings turned into one combined sampler per stage. Checked against the port's own generated
+  shaders (vertex, fixed function pixel, a pixel shader sampling a shadow map, a screen quad): all four are valid ES
+  3.00 as glslang itself parses them.
+* `native/draw_common.h` -- the constants, keys and CPU-side helpers a draw needs, copied **verbatim** from the Vulkan
+  backend. The two renderers must compute the same numbers, so the second one does not get its own version of them.
+* SPIRV-Cross is fetched by `android/CMakeLists.txt` the same way glslang is, and builds for arm64.
+
+What is still to come: the backend itself (`native/gles.cpp`: EGL window, targets, textures, the draw path, present and
+read-back), the `RENDERER` row in the port menu, and choosing the window's graphics API before it is created. Vulkan
+stays the default; GL ES will be a switch, and an option the port can pick by itself on a GPU it knows draws badly.
+
 ## Credits and licences
 
 The renderer, the SDK and the port's structure come from the **XboxXBE-Recomp / Recompiled** project (MIT), and the
