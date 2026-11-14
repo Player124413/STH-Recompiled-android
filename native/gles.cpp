@@ -1381,8 +1381,12 @@ void GlesBackend::Present(const Surface& front) {
             // whether or not the present pass gets it to the screen
             if (t) {
                 ImGui::Text("the frame the game draws:");
+#if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19200
                 ImGui::Image(ImTextureRef(ImTextureID(t->img.tex)), ImVec2(256.0f, 192.0f), ImVec2(0.0f, 1.0f),
                              ImVec2(1.0f, 0.0f));
+#else
+                ImGui::Image(ImTextureID(t->img.tex), ImVec2(256.0f, 192.0f), ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+#endif
             }
             ImGui::End();
         }
