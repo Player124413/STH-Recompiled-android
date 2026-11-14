@@ -187,6 +187,7 @@ class GlesBackend final : public Backend {
     void SetGamma(const uint8_t* ramp) override;
 
     void Report(const char* what);
+    void CheckGl(const char* where);  // the first driver error, with the step that caused it
     const std::string& Name() const { return renderer_; }
 
   private:
@@ -231,6 +232,9 @@ class GlesBackend final : public Backend {
     Assembled asm_;
     GLint gamma_loc_ = -1;
     bool warned_cube_ = false;
+    bool error_seen_ = false;
+    GLuint dummy_tex_ = 0;  // stands in for a stage that cannot be read at all
+    GLuint present_vao_ = 0;
     GLuint feedback_tex_ = 0, feedback_fbo_ = 0;  // the copy feedback stages read
     uint32_t feedback_w_ = 0, feedback_h_ = 0;
     GLuint scratch_ = 0;   // guest sized copy of a target being read back
@@ -241,7 +245,8 @@ class GlesBackend final : public Backend {
     bool start_failed_ = false;
     std::string renderer_ = "?";   // the driver's name, for the graphics report
     std::string problem_;          // the first thing that went wrong with a shader or the driver, shown on the screen
-    uint32_t draws_ = 0;
+    uint32_t draws_ = 0, issued_ = 0;
+    int32_t last_vp_[4] = {};
     double fps_ = 0;
     int fps_n_ = 0;
     std::chrono::steady_clock::time_point fps_t_ = std::chrono::steady_clock::now();
@@ -308,6 +313,18 @@ bool GlesBackend::Start(SDL_Window* window) {
     glDisable(GL_CULL_FACE);
     glGenVertexArrays(1, &vao_);
     glBindVertexArray(vao_);
+    glGenVertexArrays(1, &present_vao_);  // no attribute arrays: the present pass reads nothing but its own vertices
+    glGenTextures(1, &dummy_tex_);
+    glBindTexture(GL_TEXTURE_2D, dummy_tex_);
+    {
+        const uint8_t px[4] = {0, 0, 0, 255};
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
     glGenBuffers(1, &vbo_);
     glGenBuffers(1, &ibo_);
     glGenBuffers(2, ubo_);
@@ -475,7 +492,10 @@ Tex* GlesBackend::EnsureTexture(const TextureDesc& d, uint64_t key) {
     tx.d = d;
     const FormatInfo& fi = Format(d.format);
     tx.decode = fi.compressed;
-    tx.levels = std::max(1u, d.levels);
+    // glTexStorage2D rejects a chain longer than the sizes allow, so the count asked for is capped at what fits
+    uint32_t fit = 1;
+    for (uint32_t m = std::max(d.width, d.height); m > 1; m >>= 1) fit++;
+    tx.levels = std::clamp(d.levels, 1u, fit);
     glGenTextures(1, &tx.img.tex);
     glBindTexture(GL_TEXTURE_2D, tx.img.tex);
     GLsizei w = GLsizei(d.cube ? d.width : d.width), h = GLsizei(d.height);
@@ -592,7 +612,8 @@ Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
         glDeleteProgram(p.id);
         p.id = 0;
     } else {
-        // the constaNt blocks are bound by name: GL ES 3.00 has no layout(binding) for them
+        // the constant blocks are bound by name: GL ES 3.00 has no layout(binding) for them
+        glUseProgram(p.id);  // a sampler's unit goes through the program, and that needs it bound
         GLuint vc = glGetUniformBlockIndex(p.id, "VC"), dc = glGetUniformBlockIndex(p.id, "DC");
         programs_built_++;
         if (vc != GL_INVALID_INDEX) glUniformBlockBinding(p.id, vc, 0);
@@ -608,6 +629,7 @@ Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
                 for (const glsl::Sampler& have : p.samplers) known = known || have.name == s.name;
                 if (!known) p.samplers.push_back(s);
             }
+        glUseProgram(0);
         programs_built_++;
     }
     Program& ref = programs_[key];
@@ -645,9 +667,10 @@ void GlesBackend::RememberDrawn(Target* rt, Target* ds) {
 // the stage's texture, its sampler state applied to the texture object (GL ES keeps filtering and wrapping there) and
 // the stage's place in the draw's constant block
 bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
-    // the target this draw writes into: a stage that names it is read from a copy, made before the draw
-    uint32_t rt_tex = 0;
+    // the targets this draw writes into: a stage that names one of them cannot be read while the draw runs
+    uint32_t rt_tex = 0, ds_tex = 0;
     if (Target* rt = FindTarget(mem::VirtualFromPhysical(s.rt.data), false)) rt_tex = rt->img.tex;
+    if (Target* ds = FindTarget(mem::VirtualFromPhysical(s.zs.data), true)) ds_tex = ds->img.tex;
     for (int i = 0; i < 4; i++) {
         stages.tex[i] = 0;
         stages.info[i] = TexInfo{};
@@ -690,11 +713,25 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
                 }
             }
         }
-        if (fi.depth) stages.info[i].shadow = ShadowDepthKind(d.format);
+        if (fi.depth && !as_target) {
+            tex = dummy_tex_;
+            levels = 1;
+        }
+        if (fi.depth && as_target) stages.info[i].shadow = ShadowDepthKind(d.format);
         stages.info[i].kind = kTex2D;
         stages.levels[i] = levels;
-        // a target sampled while the draw writes into it: GL leaves that undefined, so it is copied out first
-        if (tex == rt_tex && rt_tex) tex = Feedback(tex, as_target->w, as_target->h);
+        // a colour target sampled while the draw writes into it: GL leaves that undefined, so it is copied out first.
+        // The depth buffer is different: a copy of it is not a depth texture any more, so the stage reads nothing, and
+        // that is also what the Vulkan backend does with it
+        if (tex && tex == ds_tex) {
+            tex = dummy_tex_;
+            levels = 1;
+            stages.levels[i] = 1;
+            stages.info[i].shadow = 0;
+        } else if (tex && tex == rt_tex && as_target) {
+            tex = Feedback(tex, as_target->w, as_target->h);
+        }
+        if (!tex) tex = dummy_tex_;
         glActiveTexture(GLenum(GL_TEXTURE0 + i));
         glBindTexture(GL_TEXTURE_2D, tex);
         stages.tex[i] = tex;
@@ -723,11 +760,9 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
 // the game wrote into the target's memory from the CPU since the GPU last drew it: the GPU's copy is the stale one
 void GlesBackend::Latch(Target& t) {
     if (t.depth || !t.data) return;
-    uint64_t epoch = DirtyEpoch(t.data);
-    if (epoch <= t.epoch) return;
-    t.epoch = epoch;
     uint64_t sig = MemSig(t.data, t.bytes);
     if (sig == t.sig) return;
+    t.epoch = DirtyEpoch(t.data);
     t.sig = sig;
     Surface su;
     su.data = t.data;
@@ -811,6 +846,7 @@ void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, ui
         glClear(bits);
     }
     RememberDrawn(rt, ds);
+    CheckGl("the clear");
 }
 
 void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
@@ -822,6 +858,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     Target* ds = s.rs[kRsZEnable] || s.rs[kRsStencilEnable] ? EnsureTarget(s.zs, true) : nullptr;
     if (rt && ds && (rt->w != ds->w || rt->h != ds->h)) ds = nullptr;
     if (!rt && !ds) return;
+    if (rt) Latch(*rt);  // the game may have put the frame together in memory since the last draw
     Target& screen = rt ? *rt : *ds;
     GuestExtent size;
     SurfaceSize(rt ? s.rt : s.zs, size.w, size.h);
@@ -842,6 +879,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     sh.vh = Module(vs, glsl::Stage::Vertex, entry);
     DrawTextures stages;
     if (!BindStageTextures(s, stages)) return;
+    CheckGl("the stage textures");
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     sh.pkey = Hash(&pk, sizeof(pk));
@@ -849,6 +887,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     if (!sh.vh || !sh.ph) return;
     Program* prog = EnsureProgram(sh.vh, sh.ph);
     if (!prog) return;
+    CheckGl("the shader program");
 
     DrawConstants c{};
     FillSurfaceConstants(s, size, c);
@@ -998,6 +1037,11 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     } else {
         glDisable(GL_CULL_FACE);
     }
+    issued_++;
+    last_vp_[0] = vx0;
+    last_vp_[1] = vy0;
+    last_vp_[2] = vx1 - vx0;
+    last_vp_[3] = vy1 - vy0;
     if (a.index_count) {
         size_t ibytes = size_t(a.index_count) * (index16 ? 2 : 4);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
@@ -1010,6 +1054,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     } else {
         glDrawArrays(mode, 0, GLsizei(drawn));
     }
+    CheckGl("the draw call");
     (void)prim;
     (void)count;
 }
@@ -1055,13 +1100,13 @@ void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, u
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     to->drawn = true;
+    CheckGl("the copy");
 }
 
 // ---- present and read-back
 
 void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
-    host::WaitForeground();
     fps_n_++;
     auto now = std::chrono::steady_clock::now();
     double el = std::chrono::duration<double>(now - fps_t_).count();
@@ -1124,18 +1169,10 @@ void GlesBackend::Present(const Surface& front) {
         glBindTexture(GL_TEXTURE_2D, t->img.tex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, lut_);
-        glBindVertexArray(vao_);
+        glBindVertexArray(present_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
-    // a driver error with no shader log to go with it is still worth showing: the frame may be made of nothing
-    if (problem_.empty()) {
-        GLenum e = glGetError();
-        if (e != GL_NO_ERROR) {
-            char text[64];
-            std::snprintf(text, sizeof(text), "GL error 0x%04X", e);
-            problem_ = text;
-        }
-    }
+    CheckGl("the present pass");
     {
         std::lock_guard lock(app::UiLock());
         ImGui_ImplOpenGL3_NewFrame();
@@ -1157,7 +1194,10 @@ void GlesBackend::Present(const Surface& front) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.45f, 1.0f));
             ImGui::TextWrapped("%s", banner.c_str());
             ImGui::PopStyleColor();
-            ImGui::Text("%llu frames, %u draws, %u programs", (unsigned long long)presents_, draws_, programs_built_);
+            ImGui::Text("%llu frames, %u draws, %u issued, %u programs, %u textures", (unsigned long long)presents_,
+                        draws_, issued_, programs_built_, unsigned(textures_.size()));
+            if (issued_)
+                ImGui::Text("last viewport %d,%d %dx%d", last_vp_[0], last_vp_[1], last_vp_[2], last_vp_[3]);
             ImGui::End();
         }
         ImGui::Render();
@@ -1218,6 +1258,7 @@ void GlesBackend::Sync(uint32_t data, uint32_t) {
             out[size_t(x) * 4 + 3] = in[size_t(x) * 4 + 3];
         }
     }
+    CheckGl("the read-back");
     t->read = std::move(px);
     t->drawn = false;
     t->sig = MemSig(t->data, t->bytes);
@@ -1229,6 +1270,18 @@ void GlesBackend::SetGamma(const uint8_t* ramp) {
     for (int i = 0; i < 256 && identity; i++) identity = ramp[i] == i && ramp[256 + i] == i && ramp[512 + i] == i;
     ramp_.assign(ramp, ramp + 256 * 3);
     gamma_ = !identity;
+}
+
+// a black screen with one error code in the log says nothing; the step it came from says everything
+void GlesBackend::CheckGl(const char* where) {
+    if (error_seen_) return;
+    GLenum e = glGetError();
+    if (e == GL_NO_ERROR) return;
+    error_seen_ = true;
+    char text[160];
+    std::snprintf(text, sizeof(text), "GL error 0x%04X after %s", e, where);
+    LOGE("gl: %s", text);
+    if (problem_.empty()) problem_ = text;
 }
 
 void GlesBackend::Report(const char* what) {
