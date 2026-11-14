@@ -150,6 +150,20 @@ void main() {
 }
 )";
 
+// the same full screen triangle, with the frame's depth buffer as its picture: a frame whose depth holds 1.0
+// everywhere had no geometry rasterised into it at all, and that is the difference between a vertex path and a
+// pixel path that has to be told apart from the screen alone
+const char* kDepthProbePixel = R"(#version 300 es
+precision highp float;
+uniform sampler2D src;
+in vec2 v_uv;
+out vec4 o;
+void main() {
+    float d = texture(src, v_uv).r;
+    o = vec4(d, d, d, 1.0);
+}
+)";
+
 const char* kPresentPixel = R"(#version 300 es
 precision highp float;
 uniform sampler2D src;
@@ -177,6 +191,7 @@ class GlesBackend final : public Backend {
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
     void FrameStats(Target& t);
+    bool MakeDepthProbe();
     void Sync(uint32_t data_va, uint32_t size) override;
     void SyncLate(uint32_t data_va) override { Sync(data_va, 0); }
     void Flush() override {
@@ -250,6 +265,17 @@ class GlesBackend final : public Backend {
     uint32_t drawn_into_ = 0;  // the address of the target the last draw went into
     int32_t drawn_size_[2] = {};
     bool frame_black_ = false;
+    GLuint depth_probe_ = 0;        // the full screen pass that shows a depth buffer
+    GLuint drawn_ds_tex_ = 0, drawn_ds_fbo_ = 0;  // the depth target the frame's draws went into, and its buffer
+    uint32_t drawn_ds_ = 0;
+    unsigned depth_lit_ = 0, depth_read_ = 0;  // how many of the depth probe's samples hold geometry
+    unsigned scene_draws_ = 0;                // draws that had a depth target
+    // a black screen names the piece of state that blacks it out, if the pieces are tried one at a time on the phone:
+    // each of these is forced for twenty frames, and the frame that comes out is measured
+    int force_ = 0, phase_ = -1;
+    unsigned phase_lit_[7] = {};
+    static constexpr const char* kPhaseName[7] = {"as drawn",   "no cull",    "front flipped", "no depth test",
+                                                  "no blend",   "all channels", "all of it"};
     unsigned frame_lit_ = 0;       // how much of the presented target is not black, in percent
     int frame_mean_[3] = {};       // and the average of its colour
     GLuint stats_fbo_ = 0, stats_tex_ = 0;  // a small copy of the target, for that average   // the target this frame presents was read back and had no pixel in it
@@ -381,6 +407,7 @@ bool GlesBackend::Start(SDL_Window* window) {
         LOGE("gl: the overlay does not start");
         return false;
     }
+    MakeDepthProbe();
     selftest_ = SelfTest() ? 1 : 2;
     if (selftest_ == 2 && problem_.empty()) problem_ = "this driver does not draw the renderer's own triangle";
     LOGI("gl: %ux%u window, ready, the renderer's own test %s", window_w_, window_h_,
@@ -1137,18 +1164,47 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     }
     // culling: the console's winding as Vulkan's KeyRasterizer reads it
     uint32_t cull = s.rs[kRsCullMode];
+    GLenum front = cull == 0x900 ? GL_CCW : GL_CW;
     if (cull && a.topology == Topology::Triangles) {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
-        glFrontFace(cull == 0x900 ? GL_CCW : GL_CW);
+        glFrontFace(front);
     } else {
         glDisable(GL_CULL_FACE);
+    }
+    // the panel's experiments: one piece of this draw's state forced for twenty frames at a time, so that a frame of
+    // nothing says which piece it is on the phone instead of waiting for another build
+    switch (force_) {
+        case 1: glDisable(GL_CULL_FACE); break;
+        case 2:
+            if (a.topology == Topology::Triangles) {
+                glEnable(GL_CULL_FACE);
+                glFrontFace(front == GL_CCW ? GL_CW : GL_CCW);
+            }
+            break;
+        case 3: glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); break;
+        case 4: glDisable(GL_BLEND); break;
+        case 5: glColorMask(1, 1, 1, 1); break;
+        case 6:
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_BLEND);
+            glColorMask(1, 1, 1, 1);
+            break;
+        default: break;
     }
     issued_++;
     last_vp_[0] = x0;
     last_vp_[1] = y0;
     last_vp_[2] = x1 - x0;
     last_vp_[3] = y1 - y0;
+    if (ds) {
+        drawn_ds_tex_ = ds->img.tex;
+        drawn_ds_fbo_ = ds->fbo;
+        drawn_ds_ = ds->data;
+        scene_draws_++;
+    }
     drawn_into_ = screen.data;
     drawn_size_[0] = int32_t(screen.w);
     drawn_size_[1] = int32_t(screen.h);
@@ -1215,6 +1271,47 @@ void GlesBackend::Copy(const Surface& src, const Surface& dst, uint32_t count, u
 
 // ---- present and read-back
 
+// the full screen pass that turns a depth buffer into a picture, for FrameStats
+bool GlesBackend::MakeDepthProbe() {
+    auto compile = [](GLenum type, const char* text) {
+        GLuint sh = glCreateShader(type);
+        glShaderSource(sh, 1, &text, nullptr);
+        glCompileShader(sh);
+        GLint ok = 0;
+        glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512] = {};
+            glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+            LOGE("gl: the depth probe's shader does not compile: %s", log);
+            glDeleteShader(sh);
+            return GLuint(0);
+        }
+        return sh;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, kPresentVertex), ps = compile(GL_FRAGMENT_SHADER, kDepthProbePixel);
+    if (!vs || !ps) return false;
+    depth_probe_ = glCreateProgram();
+    glAttachShader(depth_probe_, vs);
+    glAttachShader(depth_probe_, ps);
+    glLinkProgram(depth_probe_);
+    glDeleteShader(vs);
+    glDeleteShader(ps);
+    GLint linked = 0;
+    glGetProgramiv(depth_probe_, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[512] = {};
+        glGetProgramInfoLog(depth_probe_, sizeof(log), nullptr, log);
+        LOGE("gl: the depth probe does not link: %s", log);
+        glDeleteProgram(depth_probe_);
+        depth_probe_ = 0;
+        return false;
+    }
+    glUseProgram(depth_probe_);
+    glUniform1i(glGetUniformLocation(depth_probe_, "src"), 0);
+    glUseProgram(0);
+    return true;
+}
+
 // How much of the frame is not black, and how bright it is on average: an eight of the target through the blitter, so
 // a black screen can be told from a dark picture without reading a megabyte off the phone every frame
 void GlesBackend::FrameStats(Target& t) {
@@ -1248,6 +1345,31 @@ void GlesBackend::FrameStats(Target& t) {
     frame_lit_ = lit * 100 / (kW * kH);
     for (int c = 0; c < 3; c++) frame_mean_[c] = int(sum[c] / (kW * kH));
     frame_black_ = lit == 0;
+    // and the depth buffer of the same frame, drawn as a picture: geometry that never rasterised leaves no mark there
+    depth_lit_ = depth_read_ = 0;
+    if (depth_probe_ && drawn_ds_tex_) {
+        static uint8_t dpx[kW * kH * 4];
+        glBindFramebuffer(GL_FRAMEBUFFER, stats_fbo_);
+        glViewport(0, 0, GLsizei(kW), GLsizei(kH));
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_CULL_FACE);
+        glColorMask(1, 1, 1, 1);
+        glUseProgram(depth_probe_);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, drawn_ds_tex_);
+        glBindVertexArray(present_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glReadPixels(0, 0, GLint(kW), GLint(kH), GL_RGBA, GL_UNSIGNED_BYTE, dpx);
+        unsigned deep = 0;
+        for (uint32_t i = 0; i < kW * kH; i++)
+            if (dpx[size_t(i) * 4] < 250) deep++;  // 1.0 is 255: anything under it had something in front of it
+        depth_lit_ = deep;
+        depth_read_ = kW * kH;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 }
 
 void GlesBackend::Present(const Surface& front) {
@@ -1261,6 +1383,17 @@ void GlesBackend::Present(const Surface& front) {
         fps_t_ = now;
     }
     Target* t = EnsureTarget(front, false);
+    // the experiments run on their own, one piece of state every twenty frames: the frame each one produces is
+    // measured when it ends, and the panel holds the results side by side
+    int phase = int((presents_ / 20) % 7);
+    if (phase != phase_) {
+        if (phase_ >= 0 && t) {
+            FrameStats(*t);
+            phase_lit_[phase_] = frame_lit_;
+        }
+        phase_ = phase;
+        force_ = phase;
+    }
     if (t) Latch(*t);  // the frame may have been put together by the CPU, or copied there by the game
     int win_w = 0, win_h = 0;
     host::WindowPixels(win_w, win_h);
@@ -1349,6 +1482,10 @@ void GlesBackend::Present(const Surface& front) {
         // in a log the player would have to find: a shader the driver rejected, or a frame nothing was drawn into
         std::string banner = problem_;
         if (banner.empty() && draws_ == 0 && presents_ > 60) banner = "no draw has reached the screen yet";
+        if (banner.empty() && frame_black_ && depth_read_ && depth_lit_ == 0 && presents_ > 120)
+            banner = "nothing the game draws lands in its frame: no colour and no depth";
+        if (banner.empty() && frame_black_ && depth_lit_ > 0 && presents_ > 120)
+            banner = "the frame has geometry but no colour: the pixel path writes black";
         if (banner.empty() && frame_black_ && presents_ > 120) banner = "the frame the game draws holds no pixel";
         // a driver that does not answer for the window surface reports it empty whatever is on the screen, so this is
         // only worth saying when the target has a picture to show and the screen still has none
@@ -1374,6 +1511,13 @@ void GlesBackend::Present(const Surface& front) {
                         frame_mean_[1], frame_mean_[2]);
             // a gamma ramp the game set is applied on the way to the screen, so a ramp of zeros is a black screen with
             // a full frame behind it: the ends of it are worth having on the screen too
+            ImGui::Text("tried: %s %u%%, %s %u%%, %s %u%%, %s %u%%, %s %u%%, %s %u%%, %s %u%%", kPhaseName[0],
+                        phase_lit_[0], kPhaseName[1], phase_lit_[1], kPhaseName[2], phase_lit_[2], kPhaseName[3],
+                        phase_lit_[3], kPhaseName[4], phase_lit_[4], kPhaseName[5], phase_lit_[5], kPhaseName[6],
+                        phase_lit_[6]);
+            if (depth_read_)
+                ImGui::Text("depth %u/%u samples hold geometry, %u draws into target %08X", depth_lit_, depth_read_,
+                            scene_draws_, drawn_ds_);
             ImGui::Text("gamma %s, ramp %d %d %d", gamma_ ? "on" : "off", ramp_.empty() ? -1 : int(ramp_[0]),
                         ramp_.empty() ? -1 : int(ramp_[128]), ramp_.empty() ? -1 : int(ramp_[255]));
             ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
