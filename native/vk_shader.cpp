@@ -2,6 +2,7 @@
 #include "vk_shader.h"
 
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <regex>
@@ -144,6 +145,19 @@ void Init(const std::filesystem::path& cache_dir) {
     std::error_code ec;
     std::filesystem::create_directories(cache_dir, ec);
     g_dir = ec ? std::filesystem::path() : cache_dir;
+    // modules of an older translation: never read again, and a phone that has taken every update should not carry
+    // megabytes of them for the rest of its life
+    char suffix[24];
+    std::snprintf(suffix, sizeof(suffix), "_%u_%u.spv", kCacheVersion, kSpirvMinor);
+    size_t keep = std::strlen(suffix);
+    std::error_code it_ec;
+    for (auto it = std::filesystem::directory_iterator(g_dir, it_ec); !it_ec && it != std::filesystem::directory_iterator();
+         it.increment(it_ec)) {
+        std::string name = it->path().filename().string();
+        if (name.size() <= keep || name.compare(name.size() - keep, keep, suffix) == 0) continue;
+        if (name.size() > 4 && (name.compare(name.size() - 4, 4, ".spv") == 0 || name.compare(name.size() - 8, 8, ".spv.tmp") == 0))
+            std::filesystem::remove(it->path(), it_ec);
+    }
 }
 
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
