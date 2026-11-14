@@ -57,9 +57,16 @@ Everything the PC build has, in a phone's shape:
   CPU refilled the vertex ring while the GPU was still reading it, and the frame came out as fog with one smeared corner.
   Fences fixed it, which is why AUTOMATIC means fences on every device now: a fence per submit is cheap next to a frame
   with no scene in it. TIMELINE is still there to compare, at the next start.
-* **Wireframe**: GRAPHICS → WIREFRAME draws every triangle as its three edges. A model drawn smoothly but wrongly and a
-  model with one vertex gone look nothing alike in wireframe: one is a dense mesh in the wrong place, the other is a fan
-  of long triangles reaching across the screen. One photo of it says which.
+* **Flat debug**: GRAPHICS → FLAT DEBUG (WIREFRAME) paints every material one plain colour, never a dark one, and on a
+  driver that offers `fillModeNonSolid` it also draws every triangle as its three edges. A model drawn smoothly but
+  wrongly and a model with one vertex gone look nothing alike: one is a dense mesh of flat colours in the wrong place,
+  the other is a fan of long triangles reaching across the screen. One photo of it says which. It is the only diagnostic
+  that needs nothing from the phone but the toggle and a photo.
+* **Shader caches are dropped when the shaders change**: the SPIR-V cache uses one file per module named after the
+  build's shader hash *and* the SPIR-V version it was translated to, so a phone that has been updated across shader
+  changes never runs an old module, and the driver's own pipeline cache (`shadercache/pipelines.bin`) is deleted when
+  the version stamp beside it no longer matches — a driver cache that outlives the shaders it was built from is a good
+  way to keep a fixed bug on screen.
 * **Send a frame**: GRAPHICS → SEND A FRAME TO THE DEV writes the frame's render targets into `dumps/` beside the settings, the
   largest first and then hands them to the share sheet, so a picture that comes out wrong can be sent from the phone in
   one tap and looked at pass by pass instead of guessed at from a screenshot. The depth targets go with them as grey,

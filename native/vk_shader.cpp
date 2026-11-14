@@ -18,8 +18,11 @@ namespace {
 
 std::filesystem::path g_dir;
 std::mutex g_lock;
+// the SPIR-V this translation emits; it is part of every cache file name, so changing it alone is enough to
+// make every cached module miss (1.3 was the first value, 1.0 came later for older phone drivers)
+constexpr uint32_t kSpirvMinor = 0;
 // bumped when the translation below changes, so older cached modules are not used
-constexpr uint32_t kCacheVersion = 2;
+constexpr uint32_t kCacheVersion = 3;
 
 struct Param {
     std::string type, name;
@@ -103,7 +106,7 @@ std::string Adapt(const std::string& hlsl) {
 
 std::filesystem::path CachePath(uint64_t hash) {
     char name[40];
-    std::snprintf(name, sizeof(name), "%016llx_%u.spv", (unsigned long long)hash, kCacheVersion);
+    std::snprintf(name, sizeof(name), "%016llx_%u_%u.spv", (unsigned long long)hash, kCacheVersion, kSpirvMinor);
     return g_dir / name;
 }
 
@@ -133,6 +136,8 @@ void Store(uint64_t hash, const std::vector<uint32_t>& spirv) {
 
 }  // namespace
 
+uint32_t CacheVersion() { return kCacheVersion * 16 + kSpirvMinor; }
+
 void Init(const std::filesystem::path& cache_dir) {
     std::lock_guard lock(g_lock);
     glslang::InitializeProcess();
@@ -155,7 +160,7 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     sh.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
     // The oldest SPIR-V that Vulkan 1.1 takes. Nothing here needs anything newer, and a driver's front end has had the
     // most years of testing on the 1.0 grammar -- which is the part of a phone's shader path the port cannot see into.
-    sh.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
+    sh.setEnvTarget(glslang::EShTargetSpv, kSpirvMinor == 0 ? glslang::EShTargetSpv_1_0 : glslang::EShTargetSpv_1_3);
     sh.setHlslIoMapping(true);
     sh.setAutoMapBindings(true);
     sh.setAutoMapLocations(true);

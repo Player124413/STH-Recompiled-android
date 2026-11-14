@@ -17,6 +17,8 @@ constexpr uint32_t kBindings = 10;
 enum class Stage { Vertex, Pixel };
 
 void Init(const std::filesystem::path& cache_dir);
+// identifies the generated SPIR-V: a driver's own pipeline cache is only valid for the version that filled it
+uint32_t CacheVersion();
 // the SPIR-V of hlsl's entry point, named "main" in the module; false after logging why
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv);
 

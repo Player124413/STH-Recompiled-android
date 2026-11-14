@@ -632,6 +632,7 @@ constexpr uint64_t kPretransformedSalt = 0x5A5A;
 constexpr uint64_t kPointsSalt = 0x9017;
 constexpr uint64_t kPixelKeySalt = 0x9E3779B97F4A7C15ull;
 constexpr uint64_t kQuadSalt = 0xC3C30000;  // the QuadHlsl variant, apart from the plain shader
+constexpr uint64_t kFlatSalt = 0xD1B54A32D192ED03ull;  // the debug flat colour pixel shader, apart from the real one
 
 uint64_t VertexKey(const State& s, const Assembled& a, const DrawShaders& sh) {
     uint64_t seed = sh.prog ? s.vs->hash ^ a.regs : Hash(&s.vs_handle, 4, a.regs | kDeclarationSalt);
@@ -1512,10 +1513,25 @@ bool VulkanBackend::CreateLayouts() {
     pi.setLayoutCount = 1;
     pi.pSetLayouts = &set_layout_;
     VK_CHECK(vkCreatePipelineLayout(dev_, &pi, nullptr, &layout_));
-    // pipelines from earlier runs: building them is what stutters on a phone
+    // pipelines from earlier runs: building them is what stutters on a phone. A driver's cache is only good for
+    // the SPIR-V that filled it, so a phone that has been updated across shader changes starts clean
+    std::filesystem::path cache_dir = app::ExeDir() / "shadercache";
     std::vector<char> blob;
-    std::ifstream f(app::ExeDir() / "shadercache" / "pipelines.bin", std::ios::binary);
-    if (f) blob.assign(std::istreambuf_iterator<char>(f), {});
+    {
+        uint32_t stamp = 0, want = vkshader::CacheVersion();
+        std::ifstream v(cache_dir / "pipelines.version", std::ios::binary);
+        if (v) v.read(reinterpret_cast<char*>(&stamp), sizeof(stamp));
+        if (stamp == want) {
+            std::ifstream f(cache_dir / "pipelines.bin", std::ios::binary);
+            if (f) blob.assign(std::istreambuf_iterator<char>(f), {});
+        } else {
+            std::error_code ec;
+            std::filesystem::remove(cache_dir / "pipelines.bin", ec);
+            LOGI("vulkan: pipeline cache is from another shader build, dropped");
+            std::ofstream w(cache_dir / "pipelines.version", std::ios::binary | std::ios::trunc);
+            w.write(reinterpret_cast<const char*>(&want), sizeof(want));
+        }
+    }
     VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     ci.initialDataSize = blob.size();
     ci.pInitialData = blob.data();
@@ -2743,13 +2759,16 @@ void VulkanBackend::EnsureVertexShader(const State& s, const Assembled& a, DrawS
 }
 
 void VulkanBackend::EnsurePixelShader(const PixelKey& pk, DrawShaders& sh) {
-    if (auto it = shader_src_.find(sh.pkey ^ kPixelKeySalt); it != shader_src_.end()) {
+    // the debug switch paints flat, and the module cache keeps the two apart
+    uint64_t key = sh.pkey ^ kPixelKeySalt ^ (port::g_wireframe ? kFlatSalt : 0);
+    if (auto it = shader_src_.find(key); it != shader_src_.end()) {
         sh.ph = it->second;
         sh.ps = modules_[sh.ph];
         return;
     }
-    sh.ps = Module(PixelHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph);
-    shader_src_[sh.pkey ^ kPixelKeySalt] = sh.ph;
+    sh.ps = port::g_wireframe ? Module(FlatHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph)
+                              : Module(PixelHlsl(pk), "main", vkshader::Stage::Pixel, sh.ph);
+    shader_src_[key] = sh.ph;
 }
 
 constexpr float kUpscaledMin = 1.01f;
