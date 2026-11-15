@@ -3864,7 +3864,10 @@ VulkanBackend* g_vulkan = nullptr;
 
 std::unique_ptr<Backend> CreateBackend() {
     // The renderer the menu was set to. Both GL paths fall back to Vulkan when the driver will not have them, and they
-    // say why in the log rather than drawing a black screen.
+    // say why in the log rather than drawing a black screen. The choice itself is never rewritten here: a fallback that
+    // saved itself would turn the next run into a Vulkan one that asked for nothing at all, with nothing in the log to
+    // say why.
+    LOGI("port: the renderer asked for is %u (0 Vulkan, 1 GL ES 3, 2 the GL one)", port::g_renderer);
     if (port::g_renderer == 2) {
         if (auto gl = CreateGl43Backend()) {
             LOGI("graphics: OpenGL renderer (the D3D12 path's own, through GL)");
@@ -3872,7 +3875,6 @@ std::unique_ptr<Backend> CreateBackend() {
         }
         LOGE("graphics: the OpenGL renderer cannot start here, Vulkan draws instead");
         if (port::g_renderer_note.empty()) port::g_renderer_note = "the OpenGL renderer refused to start";
-        port::g_renderer = 0;
     }
     if (port::g_renderer == 1) {
         if (auto es = CreateGlesBackend()) {
@@ -3880,7 +3882,7 @@ std::unique_ptr<Backend> CreateBackend() {
             return es;
         }
         LOGE("graphics: no GL ES 3 context here, Vulkan draws instead");
-        port::g_renderer = 0;
+        if (port::g_renderer_note.empty()) port::g_renderer_note = "no GL ES 3 context";
     }
     auto backend = std::make_unique<VulkanBackend>();
     g_vulkan = backend.get();
