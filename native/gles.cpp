@@ -142,7 +142,7 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "gamma2";
+constexpr const char* kGlBuild = "gamma3";
 
 const char* kPresentVertex = R"(#version 300 es
 out vec2 v_uv;
@@ -282,6 +282,11 @@ class GlesBackend final : public Backend {
     static constexpr const char* kPhaseName[7] = {"as drawn",   "no cull",    "front flipped", "no depth test",
                                                   "no blend",   "all channels", "all of it"};
     double asm_ms_ = 0, draw_ms_ = 0, present_ms_ = 0;  // this frame's CPU time, and where it went
+    // where the present pass puts the console's picture, and what the drawable underneath actually is: a picture that
+    // does not fill the phone is one of these two numbers disagreeing
+    int32_t present_vp_[4] = {};
+    int32_t drawable_[2] = {};
+    bool present_wide_ = false;
     unsigned frame_lit_ = 0;       // how much of the presented target is not black, in percent
     int frame_mean_[3] = {};       // and the average of its colour
     GLuint stats_fbo_ = 0, stats_tex_ = 0;  // a small copy of the target, for that average   // the target this frame presents was read back and had no pixel in it
@@ -1412,6 +1417,12 @@ void GlesBackend::Present(const Surface& front) {
         window_w_ = uint32_t(win_w);
         window_h_ = uint32_t(win_h);
     }
+    {   // the drawable's own size, as the last frame's overlay left the viewport: the phone's screen in pixels
+        GLint vp[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, vp);
+        drawable_[0] = vp[2];
+        drawable_[1] = vp[3];
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // this frame's vertices and indices get storage of their own: a driver handed the same buffer every frame has to
     // wait for the last one to finish reading it, and orphaning it here is what keeps the frame from stalling on that
@@ -1441,6 +1452,11 @@ void GlesBackend::Present(const Surface& front) {
         vy = (h - vh) * 0.5f;
     }
     glViewport(GLint(vx), GLint(vy), GLsizei(std::max(vw, 1.0f)), GLsizei(std::max(vh, 1.0f)));
+    present_vp_[0] = int32_t(vx);
+    present_vp_[1] = int32_t(vy);
+    present_vp_[2] = int32_t(std::max(vw, 1.0f));
+    present_vp_[3] = int32_t(std::max(vh, 1.0f));
+    present_wide_ = shadow::g_widescreen;
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
@@ -1545,6 +1561,8 @@ void GlesBackend::Present(const Surface& front) {
                         ramp_mean_[2], ramp_high_);
             ImGui::Text("build %s, cpu draw %.1f ms (vertices %.1f), present %.1f ms", kGlBuild, draw_ms_, asm_ms_,
                         present_ms_);
+            ImGui::Text("present %dx%d at %d,%d, widescreen %s, drawable %dx%d", present_vp_[2], present_vp_[3],
+                        present_vp_[0], present_vp_[1], present_wide_ ? "on" : "off", drawable_[0], drawable_[1]);
             ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
             // the frame itself, drawn by the overlay: what the game put in the target is then in the screenshot
             // whether or not the present pass gets it to the screen
