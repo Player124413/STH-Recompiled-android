@@ -1095,6 +1095,10 @@ private:
 
     VkSwapchainKHR swap_ = VK_NULL_HANDLE;
     VkFormat swap_fmt_ = VK_FORMAT_B8G8R8A8_UNORM;
+    // the turn the surface is given in: a phone that offers no upright surface has the compositor turn the picture on
+    // its way to the panel, and the frame has to go in turned the other way or it arrives lying on its side
+    VkSurfaceTransformFlagBitsKHR swap_transform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    VkSurfaceTransformFlagsKHR swap_transforms_ = 0;
     VkExtent2D swap_extent_{};
     std::vector<VkImage> swap_images_;
     std::vector<VkImageView> swap_views_;
@@ -1454,6 +1458,8 @@ bool VulkanBackend::CreateSwapchain() {
     ci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
                           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
                           : caps.currentTransform;
+    swap_transform_ = ci.preTransform;
+    swap_transforms_ = caps.supportedTransforms;
     ci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
                             ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                             : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
@@ -2689,6 +2695,7 @@ std::string VulkanBackend::Info() const {
         "sync: %s, asked Vulkan %u.%u\ndynamic rendering: %s\n"
         "depth: %s, BC %d, ASTC %d, ETC2 %d\n"
         "draw scale: %.2f (%u%%%s), HD 3D world %s, safe graphics %s\n"
+        "surface: %s, offers %s\n"
         "vertex fetch: %s\n"
         "swapchain: %ux%u %s\n"
         "textures: %u live, %.1f MB, %u decoded by the CPU\n"
@@ -2699,7 +2706,8 @@ std::string VulkanBackend::Info() const {
         VK_API_VERSION_MAJOR(asked_api_), VK_API_VERSION_MINOR(asked_api_), dynamic_ ? "on" : "off (render passes)", depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
         caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2, scale_,
         app::Get().render_percent, port::g_dynamic_res ? " dynamic" : "", shadow::g_hd_scene ? "on" : "off",
-        SafeName(),
+        SafeName(), swap_transform_ == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ? "upright" : "turned by the compositor",
+        (swap_transforms_ & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? "an upright surface" : "no upright surface",
         gpu::g_raw_vertices ? "the guest's buffers" : "converted on the CPU",
         swap_extent_.width, swap_extent_.height, fmt, uint32_t(textures_.size()), double(tex_bytes) / 1048576.0,
         decoded, (unsigned long long)diag_draws_, (unsigned long long)diag_points_,
