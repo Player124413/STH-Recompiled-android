@@ -70,7 +70,11 @@ std::string Common() { return kCommonHead + Hooks().Constants() + kCommonTail; }
 
 const char* kVsHelpers = R"(
 float4 mac_mul(float4 a, float4 b) { return (a == 0 || b == 0) ? (float4)0 : a * b; }
-int mac_arl(float v) { return (int)floor(v + 1e-3); }
+// ARL / mova rounds to the nearest integer, the way the console's hardware does. floor threw away the fraction, so a
+// bone index that arrived as 3.9999 -- what a matrix product gives -- picked bone 3 instead of 4: the model came out
+// deformed, and on a driver that does not smooth the mistake over it came out smeared. 0.5 goes away from zero, which
+// is what the rounding mode of both the hardware and D3D's mova does
+int mac_arl(float v) { return int(lroundf(v)); }
 // magnitude clamped between 1 / 2^64 and 2^64, sign kept
 float magclamp(float v) { float m = clamp(abs(v), 5.42101e-20, 1.84467e+19); return v < 0 ? -m : m; }
 float4 ilu_rcp(float v) { return (1.0 / v).xxxx; }

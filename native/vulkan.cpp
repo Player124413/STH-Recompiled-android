@@ -915,6 +915,9 @@ public:
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
     void DumpFrame() { dump_left_ = 1; }
+    // the next draws of the frame, with the constants they read: a smeared model is a vertex path fed the wrong
+    // matrices, and this is the only way to see which draw got what instead of reading a screenshot
+    void DumpDraws() { draws_dump_left_ = 40; draws_dump_.clear(); }
     std::string Info() const;
     void Sync(uint32_t data, uint32_t size) override;
     void SyncLate(uint32_t data) override;
@@ -1163,6 +1166,8 @@ private:
     // what the frames asked of the GPU; Report() puts it in the log, once early and once the title is running, and
     // whenever the player asks from the menu. A wrong picture on one driver and not another is told apart here
     int dump_left_ = 0;  // the frames still to be written out as PNGs, from the menu's DUMP FRAME
+    int draws_dump_left_ = 0;  // draws still to be written out, from the menu's DUMP DRAWS
+    std::string draws_dump_;
     uint64_t diag_draws_ = 0, diag_points_ = 0, diag_sprites_ = 0, diag_wide_ = 0, diag_feedback_ = 0,
              diag_targets_ = 0, diag_flushes_ = 0, diag_pipes_ = 0, diag_uploads_ = 0;
     VkPhysicalDeviceFeatures caps_{};  // everything the GPU offers, for the report
@@ -3158,6 +3163,19 @@ int DrawHudPiece(const State& s, const Assembled& a, bool prog, uint32_t w) {
 
 void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
     diag_draws_++;
+    if (draws_dump_left_ > 0 && draws_dump_.size() < 2 * 1024 * 1024) {
+        draws_dump_left_--;
+        char h[256];
+        std::snprintf(h, sizeof(h), "draw %llu: prim %u, start %u, count %u, indices %s, vp %08X ps %08X\n",
+                      (unsigned long long)diag_draws_, prim, start, count, indices ? "yes" : "none",
+                      s.vs ? s.vs->program : 0, s.ps ? s.ps->program : 0);
+        draws_dump_ += h;
+        for (uint32_t i = 0; i < 96; i++) {  // the registers a bone palette lives in, four floats a line
+            std::snprintf(h, sizeof(h), "  c%u = %12.5f %12.5f %12.5f %12.5f\n", i, s.vsc[i][0], s.vsc[i][1],
+                          s.vsc[i][2], s.vsc[i][3]);
+            draws_dump_ += h;
+        }
+    }
     if (DepthCopy(s)) return;
     Assembled& a = asm_;
     if (!Assemble(s, prim, start, count, indices, a)) return;
@@ -3768,6 +3786,15 @@ void VulkanBackend::Present(const Surface& front) {
         dump_left_--;
         DumpTargets();  // the targets still hold the frame that was drawn last
     }
+    if (!draws_dump_.empty() && draws_dump_left_ == 0) {
+        std::error_code ec;
+        std::filesystem::path dir = app::ExeDir() / "dumps";
+        std::filesystem::create_directories(dir, ec);
+        std::ofstream out(dir / "draws.txt");
+        if (out) out << draws_dump_;
+        LOGI("vulkan: the draws with their constants are in dumps/draws.txt (%zu bytes)", draws_dump_.size());
+        draws_dump_.clear();
+    }
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if (ramp_dirty_) UploadGammaRamp();
@@ -3841,6 +3868,10 @@ void GraphicsReport() {
     else GlesGraphicsReport();
 }
 
+void DumpDraws() {
+    if (g_vulkan) g_vulkan->DumpDraws();
+}
+
 void DumpFrame() {
     if (g_vulkan) g_vulkan->DumpFrame();
 }
@@ -3853,4 +3884,9 @@ namespace host {
 void GraphicsReport() { gpu::GraphicsReport(); }
 void DumpFrame() { gpu::DumpFrame(); }
 std::string GraphicsInfo() { return gpu::GraphicsInfo(); }
+}  // namespace host
+
+namespace host {
+// the menu's DUMP DRAWS: the renderer collects the next draws, this hands them over
+void DumpDraws() { gpu::DumpDraws(); }
 }  // namespace host
