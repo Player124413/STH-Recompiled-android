@@ -1311,10 +1311,15 @@ bool VulkanBackend::PickDevice() {
             // under the GPU and the frame came out as fog with no geometry in it at all. Fences gave that phone its
             // scene back, so they are what AUTOMATIC means on every device -- a fence per submit is cheap next to a
             // frame with no scene in it. TIMELINE on the menu's GRAPHICS page compares, at the next start.
+            // a Mali is never given the timeline path, whatever the menu says: the value it hands back says the GPU is
+            // past work it has not finished, and the frame that follows is the fog with no geometry in it that the
+            // Mali-G57 gave before fences
+            const bool mali = std::strstr(p.deviceName, "Mali") != nullptr;
             timeline_ok_ = api >= VK_API_VERSION_1_2;
-            if (timeline_ok_ && port::g_timeline_semaphores != 1) {
+            if (timeline_ok_ && (port::g_timeline_semaphores != 1 || mali)) {
                 timeline_ok_ = false;
-                LOGR("vulkan: fences for timeline semaphores (the timeline path is not trusted yet)");
+                LOGR("vulkan: fences for timeline semaphores (%s)", mali ? "a Mali is not given the timeline path"
+                                                                         : "the timeline path is not trusted yet");
             }
             if (!dynamic_) LOGR("vulkan: no dynamic rendering, using render passes");
             if (!timeline_ok_) LOGR("vulkan: Vulkan %u.%u, using fences for timeline semaphores",
