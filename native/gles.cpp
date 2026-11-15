@@ -143,7 +143,11 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "fetch";
+constexpr const char* kGlBuild = "ring";
+
+// a frame's constants go into a ring rather than one block: a draw that overwrites the block the GPU is still reading
+// makes the driver wait for it, and that wait was most of what a frame cost
+constexpr size_t kUboRingBytes = 1024 * 1024;
 
 // a host vertex format as GL fetches it: components, type, and whether the integers are normalized, which is what the
 // Vulkan backend's own format table says for the same formats
@@ -297,6 +301,8 @@ class GlesBackend final : public Backend {
     std::string problem_;          // the first thing that went wrong with a shader or the driver, shown on the screen
     uint32_t draws_ = 0, issued_ = 0;
     int32_t last_vp_[4] = {};
+    std::unordered_map<uint32_t, uint64_t> glow_seen_;  // target data -> the frame its glow was cleared in
+    size_t ubo_align_ = 256, ubo_vc_ = 0, ubo_dc_ = 0;  // where this frame's constants are in their rings
     uint32_t drawn_into_ = 0;  // the address of the target the last draw went into
     int32_t drawn_size_[2] = {};
     bool frame_black_ = false;
@@ -406,12 +412,13 @@ bool GlesBackend::Start(SDL_Window* window) {
     glGenBuffers(1, &vbo_);
     glGenBuffers(1, &ibo_);
     glGenBuffers(2, ubo_);
+    GLint ubo_align = 256;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &ubo_align);
+    ubo_align_ = size_t(std::max(ubo_align, 16));
     glBindBuffer(GL_UNIFORM_BUFFER, ubo_[0]);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(State::vsc), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(kUboRingBytes), nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_UNIFORM_BUFFER, ubo_[1]);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(DrawConstants), nullptr, GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo_[0]);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 1, ubo_[1]);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(kUboRingBytes), nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     // the frame goes to the window through one full screen pass, gamma ramp included
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
@@ -1054,6 +1061,22 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     if (rt && ds && (rt->w != ds->w || rt->h != ds->h)) ds = nullptr;
     if (!rt && !ds) return;
     if (rt) Latch(*rt);  // the game may have put the frame together in memory since the last draw
+    // the extension's Bound hook: a 512x512 glow target is cleared before the frame first copies from it, so the bloom
+    // is this frame's and not the last one's smeared under it, exactly as the Vulkan backend has it
+    if (rt && !rt->depth && rt->gw == kSceneSize && rt->gh == kSceneSize) {
+        uint64_t& seen = glow_seen_[rt->data];
+        if (seen != presents_ + 1) {
+            seen = presents_ + 1;
+            if (!ds && a.pretransformed && !SimpleState(s, kMBlendEnable)) {
+                glBindFramebuffer(GL_FRAMEBUFFER, rt->fbo);
+                glDisable(GL_SCISSOR_TEST);
+                glColorMask(1, 1, 1, 1);
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
+        }
+    }
     Target& screen = rt ? *rt : *ds;
     GuestExtent size;
     SurfaceSize(rt ? s.rt : s.zs, size.w, size.h);
@@ -1102,10 +1125,22 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
         FillLightConstants(s, sh.fk, c);
     }
     c.zparams[3] = 0;
+    // this draw's two constant blocks, each at its own place in the frame's ring, bound as a range
+    auto ring = [](size_t& at, size_t bytes, size_t align) {
+        size_t off = (at + align - 1) / align * align;
+        if (off + bytes > kUboRingBytes) off = 0;
+        return off;
+    };
+    size_t vc_off = ring(ubo_vc_, sizeof(s.vsc), ubo_align_);
     glBindBuffer(GL_UNIFORM_BUFFER, ubo_[0]);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(s.vsc), s.vsc.data());
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(vc_off), GLsizeiptr(sizeof(s.vsc)), s.vsc.data());
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, ubo_[0], GLintptr(vc_off), GLsizeiptr(sizeof(s.vsc)));
+    ubo_vc_ = vc_off + sizeof(s.vsc);
+    size_t dc_off = ring(ubo_dc_, sizeof(c), ubo_align_);
     glBindBuffer(GL_UNIFORM_BUFFER, ubo_[1]);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(c), &c);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(dc_off), GLsizeiptr(sizeof(c)), &c);
+    glBindBufferRange(GL_UNIFORM_BUFFER, 1, ubo_[1], GLintptr(dc_off), GLsizeiptr(sizeof(c)));
+    ubo_dc_ = dc_off + sizeof(c);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     // the vertices: the guest's own buffers and formats, as the Vulkan backend fetches them, or the float4 registers
@@ -1511,6 +1546,7 @@ void GlesBackend::Present(const Surface& front) {
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibo_size_), nullptr, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     }
+    ubo_vc_ = ubo_dc_ = 0;
     // the console's picture on the phone's screen: edge to edge when the game is widened for the wider screen, and its
     // own 4:3 with black bars beside it when it is not, the same rule the Vulkan renderer's present pass keeps
     float w = float(std::max(window_w_, 1u)), h = float(std::max(window_h_, 1u));
