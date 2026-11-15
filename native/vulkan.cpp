@@ -972,6 +972,7 @@ private:
     bool InitUi();
 
     // memory and objects
+    VkFormat UsableFormat(VkFormat f, VkImageUsageFlags usage);
     bool CreateImage(Image& im, VkFormat fmt, uint32_t w, uint32_t h, uint32_t d, uint32_t layers, uint32_t levels,
                      VkImageUsageFlags usage, VkImageViewType vt, bool cube = false);
     bool CreateBuffer(Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage, bool host);
@@ -1102,6 +1103,7 @@ private:
 
     VkSwapchainKHR swap_ = VK_NULL_HANDLE;
     VkFormat swap_fmt_ = VK_FORMAT_B8G8R8A8_UNORM;
+    std::unordered_map<VkFormat, VkFormatProperties> format_props_;  // what the driver says each format can do
     // the turn the surface is given in: a phone that offers no upright surface has the compositor turn the picture on
     // its way to the panel, and the frame has to go in turned the other way or it arrives lying on its side
     VkSurfaceTransformFlagBitsKHR swap_transform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -1696,8 +1698,33 @@ bool VulkanBackend::InitUi() {
 
 // ---- memory and objects
 
+// a format the driver says it does not offer for what this image is for is replaced before the image exists: a Mali
+// does not refuse what it cannot do, it draws from it, and what comes out is read as garbage vertices or a black
+// texture. Adreno answers the same question by making it work, which is why the same code is a picture there
+VkFormat VulkanBackend::UsableFormat(VkFormat f, VkImageUsageFlags usage) {
+    if (f == VK_FORMAT_UNDEFINED) return f;
+    auto it = format_props_.find(f);
+    if (it == format_props_.end()) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(pd_, f, &props);
+        it = format_props_.emplace(f, props).first;
+    }
+    VkFormatFeatureFlags need = (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) ? VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT
+                                : (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                                    ? VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+                                    : VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if (it->second.optimalTilingFeatures & need) return f;
+    VkFormat alt = (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ? depth_fmt_ : kBgra;
+    LOG_FIRST(8, "vulkan: format %d is not offered here for %s (features %08X), %d taken instead", int(f),
+              need == VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT ? "a colour target"
+              : need == VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT ? "a depth target" : "sampling",
+              it->second.optimalTilingFeatures, int(alt));
+    return alt;
+}
+
 bool VulkanBackend::CreateImage(Image& im, VkFormat fmt, uint32_t w, uint32_t h, uint32_t d, uint32_t layers,
                                 uint32_t levels, VkImageUsageFlags usage, VkImageViewType vt, bool cube) {
+    fmt = UsableFormat(fmt, usage);
     im = {};
     im.fmt = fmt;
     im.w = w;
@@ -3707,6 +3734,11 @@ void VulkanBackend::Report(const char* why) {
          uint32_t(textures_.size()), double(tex_bytes) / 1048576.0, tex_decoded, dynres::Percent(), scale_,
          timeline_ok_ ? "timeline semaphores" : "fences");
     if (port::g_safe_graphics) LOGI("graphics: safe graphics %s", SafeName());
+    LOGI("graphics: %s, Vulkan %u.%u, %s, %s, depth %s, BC %d ASTC %d ETC2 %d, safe graphics %s", props_.deviceName,
+         VK_API_VERSION_MAJOR(props_.apiVersion), VK_API_VERSION_MINOR(props_.apiVersion),
+         timeline_ok_ ? "timeline" : "fences", dynamic_ ? "dynamic rendering" : "render passes",
+         depth_fmt_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8", caps_.textureCompressionBC,
+         caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2 ? 1 : 0, SafeName());
     LOGI("graphics: BC %d, ASTC %d, ETC2 %d, point size %.0f to %.0f, lod bias %.1f, depth %s, dynamic rendering %d, "
          "render scale %.3f, HD scene %d, texture filter %d, aniso %u",
          caps_.textureCompressionBC, caps_.textureCompressionASTC_LDR, caps_.textureCompressionETC2,
