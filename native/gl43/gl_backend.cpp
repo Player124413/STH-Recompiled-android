@@ -2105,7 +2105,9 @@ void GlBackend::ApplyState(const State& s, const Assembled& a) {
     if (Changed(c.cull, int8_t(culled))) culled ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
     if (culled && Changed(c.cullface, GLenum(GL_BACK))) glCullFace(GL_BACK);
     uint32_t fill = s.rs[kRsFillMode];
-    if (Changed(c.poly, GLenum(fill == 0x1B01 ? GL_LINE : fill == 0x1B00 ? GL_POINT : GL_FILL))) /* ES has no glPolygonMode: every primitive is filled (the console never asks for lines either) */
+    // ES has no glPolygonMode, and the title never leaves the fill mode: the key is still tracked so a state change is
+    // seen, nothing is asked of the driver
+    (void)c.poly;
 }
 
 // The game's 16:9 picture: what it draws flat on a frame sized target (the HUD, menus, text) is kept 4:3 in the middle.
