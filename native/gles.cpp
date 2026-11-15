@@ -8,6 +8,7 @@
 #include <SDL3/SDL.h>
 
 #include <GLES3/gl3.h>
+#include <dxgiformat.h>  // the host vertex formats the guest's declarations name, as the Vulkan backend takes them
 
 #include <algorithm>
 #include <chrono>
@@ -142,7 +143,36 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "blit";
+constexpr const char* kGlBuild = "fetch";
+
+// a host vertex format as GL fetches it: components, type, and whether the integers are normalized, which is what the
+// Vulkan backend's own format table says for the same formats
+struct GLAttr {
+    GLint size;
+    GLenum type;
+    GLboolean norm;
+};
+
+GLAttr AttrOf(uint32_t dxgi) {
+    switch (dxgi) {
+        case DXGI_FORMAT_R32G32B32A32_FLOAT: return {4, GL_FLOAT, GL_FALSE};
+        case DXGI_FORMAT_R32G32B32_FLOAT: return {3, GL_FLOAT, GL_FALSE};
+        case DXGI_FORMAT_R32G32_FLOAT: return {2, GL_FLOAT, GL_FALSE};
+        case DXGI_FORMAT_R32_FLOAT: return {1, GL_FLOAT, GL_FALSE};
+        case DXGI_FORMAT_R32_UINT: return {1, GL_UNSIGNED_INT, GL_FALSE};
+        case DXGI_FORMAT_R16G16B16A16_SNORM: return {4, GL_SHORT, GL_TRUE};
+        case DXGI_FORMAT_R16G16B16A16_SINT: return {4, GL_SHORT, GL_FALSE};
+        case DXGI_FORMAT_R16G16_SNORM: return {2, GL_SHORT, GL_TRUE};
+        case DXGI_FORMAT_R16G16_SINT: return {2, GL_SHORT, GL_FALSE};
+        case DXGI_FORMAT_R16_SNORM: return {1, GL_SHORT, GL_TRUE};
+        case DXGI_FORMAT_R16_SINT: return {1, GL_SHORT, GL_FALSE};
+        case DXGI_FORMAT_R8G8B8A8_UNORM: return {4, GL_UNSIGNED_BYTE, GL_TRUE};
+        case DXGI_FORMAT_R8G8_UNORM: return {2, GL_UNSIGNED_BYTE, GL_TRUE};
+        case DXGI_FORMAT_R8_UNORM: return {1, GL_UNSIGNED_BYTE, GL_TRUE};
+        case DXGI_FORMAT_B8G8R8A8_UNORM: return {4, GL_UNSIGNED_BYTE, GL_TRUE};
+        default: return {4, GL_FLOAT, GL_FALSE};
+    }
+}
 
 const char* kPresentVertex = R"(#version 300 es
 out vec2 v_uv;
@@ -307,8 +337,9 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
     // the frame is drawn at the console's own size, not at a multiple of it: this renderer's targets then hold exactly
     // the pixels the game's shaders ask for, and the present pass stretches the frame over the phone's screen by itself
     scale_ = 1.0f;
-    // the console's vertices are read by the CPU and handed over as float4: one vertex layout, no driver format rules
-    g_raw_vertices = false;
+    // the guest's vertex buffers and formats are fetched as they are, exactly as the Vulkan backend fetches them on the
+    // same phone: a declaration the host cannot read still falls back to the float4 the input assembler makes
+    g_raw_vertices = true;
     // the port hands its commands to a render thread of its own, and a GL context belongs to the thread that made it:
     // the context is made on whichever thread asks for it first, and every call from then on brings it along
     vkshader::Init(app::ExeDir() / "shadercache");
@@ -1077,29 +1108,60 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(c), &c);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    // the console's vertices arrive as float4 registers packed one after another, which is one attribute each
-    uint32_t stride = 0, regs = 0;
-    uint32_t locations[16] = {}, offsets[16] = {};
-    for (uint32_t r = 0; r < 16; r++) {
-        if (!((a.regs >> r) & 1)) continue;
-        locations[regs] = r;
-        offsets[regs] = stride;
-        stride += 16;
-        regs++;
-    }
+    // the vertices: the guest's own buffers and formats, as the Vulkan backend fetches them, or the float4 registers
+    // the input assembler converted on the CPU when the guest's declaration is one the host cannot read
+    uint32_t regs = uint32_t(std::popcount(a.regs));
     if (!regs || a.vertex_count == 0) return;
-    size_t vbytes = size_t(a.vertex_count) * stride;
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    if (vbytes > vbo_size_) {
-        vbo_size_ = std::max(vbytes, size_t(1) << 16);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbo_size_), nullptr, GL_DYNAMIC_DRAW);
-    }
-    glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), a.vertices.data());
-    for (uint32_t i = 0; i < regs; i++) {
-        glEnableVertexAttribArray(locations[i]);
-        glVertexAttribPointer(locations[i], 4, GL_FLOAT, GL_FALSE, GLsizei(stride),
-                              reinterpret_cast<const void*>(uintptr_t(offsets[i])));
+    if (a.buffer_count && a.buffers[0].src && a.vertices.empty()) {
+        // one upload of the draw's buffers, each at its own offset: a program reads the register it declares from the
+        // buffer and byte offset the guest's declaration gives it
+        uint32_t offsets[16] = {};
+        size_t total = 0;
+        for (uint32_t b = 0; b < a.buffer_count && b < 16; b++) {
+            const VertexBuffer& vb = a.buffers[b];
+            if (!vb.src || !vb.bytes) return;
+            offsets[b] = uint32_t(total);
+            total += (size_t(vb.bytes) + 15u) & ~size_t(15);
+        }
+        if (total > vbo_size_) {
+            vbo_size_ = std::max(total, size_t(1) << 16);
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbo_size_), nullptr, GL_DYNAMIC_DRAW);
+        }
+        for (uint32_t b = 0; b < a.buffer_count && b < 16; b++)
+            glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offsets[b]), GLsizeiptr(a.buffers[b].bytes), a.buffers[b].src);
+        for (uint32_t r = 0; r < 16; r++) {
+            if (!((a.regs >> r) & 1)) continue;
+            const VertexElement& e = a.elements[r];
+            if (e.buffer >= a.buffer_count) continue;
+            GLAttr at = AttrOf(e.format);
+            glVertexAttribPointer(GLuint(r), at.size, at.type, at.norm, GLsizei(a.buffers[e.buffer].stride),
+                                  reinterpret_cast<const void*>(uintptr_t(offsets[e.buffer] + e.offset)));
+            glEnableVertexAttribArray(GLuint(r));
+        }
+    } else {
+        uint32_t stride = 0;
+        uint32_t locations[16] = {}, offsets[16] = {};
+        for (uint32_t r = 0; r < 16; r++) {
+            if (!((a.regs >> r) & 1)) continue;
+            locations[regs] = r;
+            offsets[regs] = stride;
+            stride += 16;
+            regs++;
+        }
+        if (!regs) return;
+        size_t vbytes = size_t(a.vertex_count) * stride;
+        if (vbytes > vbo_size_) {
+            vbo_size_ = std::max(vbytes, size_t(1) << 16);
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbo_size_), nullptr, GL_DYNAMIC_DRAW);
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), a.vertices.data());
+        for (uint32_t i = 0; i < regs; i++) {
+            glEnableVertexAttribArray(locations[i]);
+            glVertexAttribPointer(locations[i], 4, GL_FLOAT, GL_FALSE, GLsizei(stride),
+                                  reinterpret_cast<const void*>(uintptr_t(offsets[i])));
+        }
     }
     // a draw that starts at the title's own first vertex has that vertex taken off its indices: GL ES has no base
     // vertex offset, and a negative one in the attributes would be no offset at all
