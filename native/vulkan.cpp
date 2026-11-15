@@ -70,7 +70,7 @@ const char* SafeName() {
 }
 
 const char* kBlitHlsl = R"(
-cbuffer B : register(b1) { float4 uvrect; float4 opts; };
+cbuffer B : register(b1) { float4 uvrect; float4 opts; float4 turn; };
 Texture2D img : register(t0);
 Texture2D lut : register(t1);
 SamplerState ls : register(s0);
@@ -84,11 +84,17 @@ O vs(uint id : SV_VertexID) {
     return o;
 }
 float4 psmain(O i) : SV_Target {
+    // the surface's turn, worked in the sampler: a window that offers no upright surface has the compositor turn the
+    // picture, so the frame goes in turned the other way and lands upright on the panel
+    float2 uv = i.uv;
+    if (turn.x > 0.5 && turn.x < 1.5) uv = float2(1.0 - uv.y, uv.x);
+    else if (turn.x > 1.5 && turn.x < 2.5) uv = float2(1.0 - uv.x, 1.0 - uv.y);
+    else if (turn.x > 2.5) uv = float2(uv.y, 1.0 - uv.x);
     float4 c = 0;
     int n = max((int)opts.z, 1);
     float2 px = fwidth(i.uv);
     for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) c += img.SampleLevel(ls, i.uv + px * ((float2(x, y) + 0.5) / n - 0.5), 0);
+        for (int x = 0; x < n; x++) c += img.SampleLevel(ls, uv + px * ((float2(x, y) + 0.5) / n - 0.5), 0);
     c /= n * n;
     c.rgb *= opts.w;
     if (opts.x > 0) c.rgb = float3(lut.Sample(ps, float2(c.r, 0.5)).r, lut.Sample(ps, float2(c.g, 0.5)).g, lut.Sample(ps, float2(c.b, 0.5)).b);
@@ -455,6 +461,7 @@ struct PsoKey {
 
 struct BlitOptions {
     bool gamma = false;
+    uint32_t rotation = 0;  // the surface's turn, as the present pass promises it: 0 upright, 1 90, 2 180, 3 270
     bool alpha = false;
     uint32_t taps = 1;
     float mul = 1;
@@ -1417,13 +1424,32 @@ bool VulkanBackend::CreateSwapchain() {
     std::vector<VkSurfaceFormatKHR> formats(n);
     vkGetPhysicalDeviceSurfaceFormatsKHR(pd_, surface_, &n, formats.data());
     if (formats.empty()) return false;
+    // desktop surfaces offer BGRA8, Android's WSI only RGBA8; both hold the same channels in the other byte order and
+    // the WSI lays them out for the display, so either presents correctly -- but BGRA8 wins whichever order the driver
+    // listed them in, and a 16 bit format is only taken when the window offers nothing 8 bit
     VkSurfaceFormatKHR chosen = formats[0];
-    for (const auto& f : formats)
-        if ((f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) &&
-            f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+    bool wide = false;
+    for (const auto& f : formats) {
+        bool eight = (f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) &&
+                     f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        if (eight && (!wide || f.format == VK_FORMAT_B8G8R8A8_UNORM)) {
             chosen = f;
-            break;
+            wide = true;
         }
+    }
+    if (!wide) {
+        bool ten = false;
+        for (const auto& f : formats)
+            if (f.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosen = f;
+                ten = true;
+                break;
+            }
+        LOGE("vulkan: the window offers no 8 bit surface format (%zu formats), %s", formats.size(),
+             ten ? "RGB10A2 taken" : "what it listed first is taken");
+    }
+    for (const auto& f : formats)
+        LOGI("vulkan: surface offers format %d in colour space %d", int(f.format), int(f.colorSpace));
     // the window's own size, landscape; Android's compositor turns the picture with the screen
     int w, h;
     host::WindowPixels(w, h);
@@ -1431,6 +1457,15 @@ bool VulkanBackend::CreateSwapchain() {
         w = int(caps.currentExtent.width);
         h = int(caps.currentExtent.height);
     }
+    if (w <= 0 || h <= 0) return false;
+    // the window's own size where it has one, then inside what the surface allows: a chain outside that range is
+    // refused or comes back a size the frame does not match, which shows as the picture stretched into a corner
+    if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX) {
+        w = int(caps.currentExtent.width);
+        h = int(caps.currentExtent.height);
+    }
+    w = int(std::clamp<uint32_t>(uint32_t(w), caps.minImageExtent.width, std::max(caps.maxImageExtent.width, 1u)));
+    h = int(std::clamp<uint32_t>(uint32_t(h), caps.minImageExtent.height, std::max(caps.maxImageExtent.height, 1u)));
     if (w <= 0 || h <= 0) return false;
     vsync_ = app::Get().vsync;
     uint32_t pn = 0;
@@ -1453,7 +1488,7 @@ bool VulkanBackend::CreateSwapchain() {
     ci.imageColorSpace = chosen.colorSpace;
     ci.imageExtent = {uint32_t(w), uint32_t(h)};
     ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
                           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
@@ -2566,8 +2601,8 @@ void VulkanBackend::UploadTarget(Target& t, const Surface& s) {
 
 // src over the rect of dst through the blit shader: its constants first, then the rendering
 void VulkanBackend::Blit(Image& dst, const VkRect2D& to, Image& src, const float uvrect[4], const BlitOptions& o) {
-    float c[8] = {uvrect[0], uvrect[1], uvrect[2], uvrect[3], o.gamma ? 1.0f : 0.0f, o.alpha ? 1.0f : 0.0f,
-                  float(o.taps), o.mul};
+    float c[12] = {uvrect[0], uvrect[1], uvrect[2], uvrect[3], o.gamma ? 1.0f : 0.0f, o.alpha ? 1.0f : 0.0f,
+                   float(o.taps), o.mul, float(o.rotation), 0, 0, 0};
     Alloc cb = Constants(c, sizeof(c));
     VkPipeline pipe = FullScreenPipeline(kBlitHlsl, "psmain", dst.fmt, VK_FORMAT_UNDEFINED, o.over);
     if (!pipe) return;
@@ -3460,8 +3495,13 @@ void VulkanBackend::DrawFrame(Target* t, uint32_t index) {
                          0, 0, nullptr, 0, nullptr, 1, &b);
     // the frame stretched to the screen: the console's picture fills a phone held either way, 16:9 widened already
     float w = float(swap_extent_.width), h = float(swap_extent_.height);
-    // opts.z: the taps a side over each screen pixel; opts.w brightens, for no palette to correct with
-    float c[8] = {0, 0, 1, 1, gamma_ ? 1.0f : 0.0f, 0, 1.0f, 1.0f};
+    // opts.z: the taps a side over each screen pixel; opts.w brightens, for no palette to correct with; turn.x: the
+    // surface's own turn, which the shader works in the sampler so the picture lands upright on the panel
+    uint32_t rotation = swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR    ? 1
+                        : swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2
+                        : swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR ? 3
+                                                                                     : 0;
+    float c[12] = {0, 0, 1, 1, gamma_ ? 1.0f : 0.0f, 0, 1.0f, 1.0f, float(rotation), 0, 0, 0};
     Alloc cbuf = Constants(c, sizeof(c));
     VkPipeline pipe = t ? FullScreenPipeline(kBlitHlsl, "psmain", swap_fmt_, VK_FORMAT_UNDEFINED, false) : VK_NULL_HANDLE;
     VkDescriptorSet set = VK_NULL_HANDLE;
@@ -3539,7 +3579,41 @@ void VulkanBackend::RenderUi() {
     if (app::kGame.ui) app::kGame.ui(fps_);
     touch::Draw();
     ImGui::Render();
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), Cb());
+    ImDrawData* draw = ImGui::GetDrawData();
+    // the panel goes in turned with the frame: the compositor turns whatever is in the surface, so both are turned
+    // here or the panel lands sideways over an upright picture
+    uint32_t rotation = swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR    ? 1
+                        : swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2
+                        : swap_transform_ == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR ? 3
+                                                                                     : 0;
+    if (rotation && draw && draw->DisplaySize.x > 0 && draw->DisplaySize.y > 0) {
+        ImVec2 size = draw->DisplaySize;
+        auto turn = [&](ImVec2 p) {
+            float x = p.x / size.x, y = p.y / size.y;
+            if (rotation == 1) {
+                float old = x;
+                x = 1 - y;
+                y = old;
+            } else if (rotation == 2) {
+                x = 1 - x;
+                y = 1 - y;
+            } else {
+                float old = x;
+                x = y;
+                y = 1 - old;
+            }
+            return ImVec2(x * size.x, y * size.y);
+        };
+        for (ImDrawList* list : draw->CmdLists) {
+            for (ImDrawVert& v : list->VtxBuffer) v.pos = turn(v.pos);
+            for (ImDrawCmd& cmd : list->CmdBuffer) {
+                ImVec2 a = turn(ImVec2(cmd.ClipRect.x, cmd.ClipRect.y));
+                ImVec2 b = turn(ImVec2(cmd.ClipRect.z, cmd.ClipRect.w));
+                cmd.ClipRect = ImVec4(std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y));
+            }
+        }
+    }
+    ImGui_ImplVulkan_RenderDrawData(draw, Cb());
 }
 
 void VulkanBackend::UploadGammaRamp() {
