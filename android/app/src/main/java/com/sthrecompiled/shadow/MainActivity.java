@@ -261,6 +261,8 @@ public class MainActivity extends SDLActivity {
         }
     }
 
+    private static final int LOG_MAX_CHARS_FULL = 4 * 1024 * 1024;
+
     private String logTail() {
         File f = newestLog();
         if (f == null) return "# no log yet: the game has not started on this phone";
@@ -283,16 +285,37 @@ public class MainActivity extends SDLActivity {
         return text.length() > LOG_MAX_CHARS ? text.substring(text.length() - LOG_MAX_CHARS) : text;
     }
 
+    // the whole log, not its tail: a phone's report is read long after the lines that matter scrolled away, and one that
+    // stops at forty lines says "the game drew nothing" with nothing after it
+    private String logAll() {
+        File f = newestLog();
+        if (f == null) return "# no log yet: the game has not started on this phone";
+        StringBuilder b = new StringBuilder();
+        b.append("# Shadow the Hedgehog ").append(versionName()).append(", ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append(", Android ").append(Build.VERSION.RELEASE).append(" (API ")
+                .append(Build.VERSION.SDK_INT).append(")\n");
+        b.append("# the whole log, ").append(f.getPath()).append('\n');
+        int lines = 0;
+        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+            for (String line; (line = r.readLine()) != null && b.length() < LOG_MAX_CHARS_FULL; lines++)
+                b.append(line).append('\n');
+        } catch (Exception e) {
+            return b.append("# could not read ").append(f.getName()).append(": ").append(e.getMessage()).toString();
+        }
+        b.append("# ").append(lines).append(" lines\n");
+        return b.toString();
+    }
+
     public void copyLog() {
         runOnUiThread(() -> {
-            String text = logTail();
+            String text = logAll();
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (cm == null) {
                 toast("No clipboard on this phone");
                 return;
             }
             cm.setPrimaryClip(ClipData.newPlainText("Shadow log", text));
-            toast("Log copied: " + text.length() / 1024 + " KB");
+            toast("Log copied: " + text.length() / 1024 + " KB, all of it");
         });
     }
 
@@ -301,7 +324,9 @@ public class MainActivity extends SDLActivity {
             Intent i = new Intent(Intent.ACTION_SEND);
             i.setType("text/plain");
             i.putExtra(Intent.EXTRA_SUBJECT, "Shadow the Hedgehog log");
-            i.putExtra(Intent.EXTRA_TEXT, logTail());
+            // the whole file is pasted in: a share sheet that drops the middle of a log is worse than none, and the
+            // receivers that cap a text extra still take the first four megabytes of it
+            i.putExtra(Intent.EXTRA_TEXT, logAll());
             try {
                 startActivity(Intent.createChooser(i, "Send the log"));
             } catch (Exception e) {
