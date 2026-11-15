@@ -33,8 +33,6 @@ bool GameActive();
 void ExitToLauncher();
 void GraphicsReport();  // what the frames so far asked of the GPU, into the log
 void DumpFrame();       // the frame's render targets as PNG files under dumps/, for a picture that comes out wrong
-void DumpDraws();       // the next draws and the vertex constants each reads, as dumps/draws.txt: a model that comes out
-                        // smeared is the vertex path fed the wrong matrices, and this says which draw got what
 std::string GraphicsInfo();  // the same facts as the report, as text for the menu's ABOUT page
 void ShareFrameDump();       // the dumped PNGs to another app: a share sheet, so a broken frame can be sent at all
 void CheckForUpdates();  // the newest release on GitHub, with "update now" or "later"

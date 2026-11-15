@@ -312,11 +312,6 @@ void GraphicsPage() {
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {
         host::DumpFrame();  // the targets of the frame just drawn, then straight out through the share sheet
     }
-    if (ButtonRow("DUMP DRAWS", IM_COL32(200, 170, 90, 255))) {
-        // the next draws with the constants they read, into dumps/draws.txt: what a smeared model needs said about it
-        host::DumpDraws();
-        LOGI("port: the next draws and their vertex constants go to dumps/draws.txt");
-    }
     Section("CUTSCENES");
     if (ToggleRow("SKIP CUTSCENES", g_skip_cutscenes)) {
         g_skip_cutscenes = !g_skip_cutscenes;
