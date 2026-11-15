@@ -99,6 +99,9 @@ list(FILTER RUNTIME_SOURCES EXCLUDE REGEX
 # the game's own sources: its hooks, plus the port's render extras and HD text, which are plain C++
 set(GAME_HOST_SOURCES ${GAME}/game/hooks.cpp ${GAME}/common/render_ext.cpp ${GAME}/common/pc_text.cpp)
 file(GLOB ANDROID_SOURCES CONFIGURE_DEPENDS ${NATIVE}/*.cpp)
+# the Spider-Man 2 renderer: 3200 lines of OpenGL in its own folder, listed one by one so nothing else in there is built
+list(APPEND ANDROID_SOURCES ${NATIVE}/gl43/gl_backend.cpp ${NATIVE}/gl43/glsl.cpp ${NATIVE}/gl43/gl_api.cpp
+     ${NATIVE}/gl43/gl_host_sdl.cpp)
 file(GLOB COMPAT_SOURCES CONFIGURE_DEPENDS ${NATIVE}/compat/*.cpp)
 # ImGui draws through whichever renderer the port chose, so both backends are in the APK
 set(IMGUI_SOURCES ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
@@ -108,7 +111,7 @@ set(IMGUI_SOURCES ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.c
 add_library(main SHARED ${RUNTIME_SOURCES} ${GAME_HOST_SOURCES} ${ANDROID_SOURCES} ${COMPAT_SOURCES} ${GEN_SOURCES}
             ${IMGUI_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/image_sha1.cpp)
 # compat/ for the SDK's x86 header, the SDK harness's for the Winsock and DXGI names its portable runtime uses
-target_include_directories(main PRIVATE ${NATIVE}/compat ${SDK}/harness/compat ${NATIVE} ${GAME} ${SDK}/runtime ${GEN}
+target_include_directories(main PRIVATE ${NATIVE}/gl43 ${NATIVE}/compat ${SDK}/harness/compat ${NATIVE} ${GAME} ${SDK}/runtime ${GEN}
                            ${CMAKE_CURRENT_BINARY_DIR} ${glslang_SOURCE_DIR} ${spirv_cross_SOURCE_DIR})
 target_include_directories(main SYSTEM PRIVATE ${imgui_SOURCE_DIR})
 # x86 chars are signed, as the game's code and the runtime were written for

@@ -3863,6 +3863,24 @@ VulkanBackend* g_vulkan = nullptr;
 }  // namespace
 
 std::unique_ptr<Backend> CreateBackend() {
+    // The renderer the menu was set to. Both GL paths fall back to Vulkan when the driver will not have them, and they
+    // say why in the log rather than drawing a black screen.
+    if (port::g_renderer == 2) {
+        if (auto gl = CreateGl43Backend()) {
+            LOGI("graphics: OpenGL renderer (the D3D12 path's own, through GL)");
+            return gl;
+        }
+        LOGE("graphics: the OpenGL renderer cannot start here, Vulkan draws instead");
+        port::g_renderer = 0;
+    }
+    if (port::g_renderer == 1) {
+        if (auto es = CreateGlesBackend()) {
+            LOGI("graphics: OpenGL ES 3 renderer");
+            return es;
+        }
+        LOGE("graphics: no GL ES 3 context here, Vulkan draws instead");
+        port::g_renderer = 0;
+    }
     auto backend = std::make_unique<VulkanBackend>();
     g_vulkan = backend.get();
     return backend;

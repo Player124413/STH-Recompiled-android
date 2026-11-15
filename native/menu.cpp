@@ -299,13 +299,17 @@ void GraphicsPage() {
         Save();
         LOGI("port: widescreen %s", g_widescreen ? "on, the picture fills the screen" : "off, the console's 4:3 with bars");
     }
-    bool gl_renderer = port::g_renderer == 1;
-    if (ToggleRow("OPENGL ES 3 RENDERER", gl_renderer)) {
-        gl_renderer = !gl_renderer;
-        port::g_renderer = gl_renderer ? 1 : 0;
-        Save();
-        LOGI("port: renderer %s, and it is the next start that uses it",
-             gl_renderer ? "OpenGL ES 3" : "Vulkan");
+    {
+        // three renderers now: the port's own ES one, and the Spider-Man 2 renderer taken whole, which draws what the
+        // D3D12 path draws
+        static const char* kNames[3] = {"VULKAN", "OPENGL ES 3", "OPENGL (SPIDER-MAN 2)"};
+        char label[64];
+        std::snprintf(label, sizeof(label), "RENDERER: %s", kNames[port::g_renderer > 2 ? 0 : port::g_renderer]);
+        if (ButtonRow(label, IM_COL32(120, 170, 220, 255))) {
+            port::g_renderer = (port::g_renderer + 1) % 3;
+            Save();
+            LOGI("port: renderer %s, and it is the next start that uses it", kNames[port::g_renderer]);
+        }
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
     ImGui::TextWrapped("OPENGL ES 3 draws the same game through the other renderer, and it takes the next start to "

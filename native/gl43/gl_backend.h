@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+struct SDL_Window;  // this port's window, forward: this header stays free of SDL
+
 #include "gpu/backend.h"
 
 namespace glr {
@@ -62,6 +64,10 @@ public:
 
 // null when GL can't be set up (no context, missing functions, GL older than 4.3)
 std::unique_ptr<gpu::Backend> CreateBackend(Host* host);
+
+// this port's own door: the Host above written on SDL, so the launcher has one call to make; nullptr when there is no
+// context or the driver lacks a function the renderer needs
+std::unique_ptr<gpu::Backend> CreateBackendOnWindow(SDL_Window* window);
 
 // a w x h RGBA8 image (red in the low byte, top row first) over the whole bound framebuffer; for the platform's own
 // screens. upload false draws the image of the last call again. Made on first use, on the GL thread.
