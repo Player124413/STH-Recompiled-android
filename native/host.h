@@ -79,6 +79,7 @@ extern bool g_safe_graphics;   // true for any mode but off
 extern uint32_t g_safe_mode;
 // 0 Vulkan (the default), 1 OpenGL ES 3.0: read when the window and the device are made, so a change needs a restart
 extern uint32_t g_renderer;
+extern bool g_flip_front;
 
 // touch controls
 extern bool g_touch_controls;

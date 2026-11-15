@@ -1294,6 +1294,9 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     // culling: the console's winding as Vulkan's KeyRasterizer reads it
     uint32_t cull = s.rs[kRsCullMode];
     GLenum front = cull == 0x900 ? GL_CCW : GL_CW;
+    // this renderer flips no y, Vulkan's viewport does, so the same console winding is the other one here; the menu's
+    // switch draws a frame each way and the picture says which
+    if (port::g_flip_front) front = front == GL_CCW ? GL_CW : GL_CCW;
     if (cull && a.topology == Topology::Triangles) {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);

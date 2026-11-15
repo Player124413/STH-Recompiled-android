@@ -318,6 +318,12 @@ void GraphicsPage() {
                        "leaves one of those on and the rest off: a picture that one workaround fixes names the part of "
                        "the renderer this driver does differently, and that part is what gets fixed.");
     ImGui::PopStyleColor();
+    if (ToggleRow("FLIP FRONT FACE", port::g_flip_front)) {
+        // the culling experiment: the same console winding drawn the other way, so a picture missing whole surfaces
+        // says which side this driver calls the front
+        port::g_flip_front = !port::g_flip_front;
+        LOGI("port: front faces are read %s", port::g_flip_front ? "the other way round" : "as the console made them");
+    }
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {
         host::DumpFrame();  // the targets of the frame just drawn, then straight out through the share sheet
