@@ -3871,6 +3871,7 @@ std::unique_ptr<Backend> CreateBackend() {
             return gl;
         }
         LOGE("graphics: the OpenGL renderer cannot start here, Vulkan draws instead");
+        if (port::g_renderer_note.empty()) port::g_renderer_note = "the OpenGL renderer refused to start";
         port::g_renderer = 0;
     }
     if (port::g_renderer == 1) {

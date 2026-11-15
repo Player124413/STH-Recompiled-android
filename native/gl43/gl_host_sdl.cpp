@@ -6,9 +6,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
+#include "core/log.h"
 #include "gl43/gl_api.h"
 #include "gl43/gl_backend.h"
+
+namespace port {
+extern std::string g_renderer_note;  // shown on the menu, so the reason needs no log file
+}
 
 namespace {
 
@@ -22,7 +28,8 @@ public:
         if (!ctx_) {
             ctx_ = SDL_GL_CreateContext(window_);
             if (!ctx_) {
-                SDL_Log("gl43: no GL context on this window (%s)", SDL_GetError());
+                port::g_renderer_note = std::string("no GL context: ") + SDL_GetError();
+                LOGE("gl43: no GL context on this window (%s)", SDL_GetError());
                 return false;
             }
             // their loader: every function the renderer names, through the driver's own lookup, which is what EGL
@@ -34,7 +41,8 @@ public:
             // glPolygonMode and glClearDepth do not exist on any ES driver; the second is mapped to glClearDepthf below,
             // and the first is not called any more, so both are loaded as optional and named in the log if absent
             if (!glapi::Load(get, &missing)) {
-                SDL_Log("gl43: this driver has no %s, so the renderer cannot run", missing ? missing : "entry point");
+                port::g_renderer_note = std::string("this driver has no ") + (missing ? missing : "entry point");
+                LOGE("gl43: this driver has no %s, so the renderer cannot run", missing ? missing : "entry point");
                 return false;
             }
             // through the loader, not the prototypes glcorearb.h leaves behind: on Android there is no libGL to link
@@ -46,7 +54,8 @@ public:
                     reinterpret_cast<const char*>(glapi::glGetString(GL_RENDERER)));
         } else if (SDL_GL_GetCurrentContext() != ctx_) {
             if (!SDL_GL_MakeCurrent(window_, ctx_)) {
-                SDL_Log("gl43: the context cannot be made current (%s)", SDL_GetError());
+                port::g_renderer_note = std::string("context not current: ") + SDL_GetError();
+                LOGE("gl43: the context cannot be made current (%s)", SDL_GetError());
                 return false;
             }
         }
@@ -83,7 +92,10 @@ std::unique_ptr<gpu::Backend> CreateBackendOnWindow(SDL_Window* window) {
     if (!g_host) g_host = new SdlHost(window);
     if (!g_host->MakeCurrent()) return nullptr;
     auto backend = CreateBackend(g_host);
-    if (!backend) SDL_Log("gl43: the renderer refused this GL ES context, Vulkan draws instead");
+    if (!backend) {
+        if (port::g_renderer_note.empty()) port::g_renderer_note = "the renderer refused this GL ES context";
+        LOGE("gl43: the renderer refused this GL ES context, Vulkan draws instead");
+    }
     return backend;
 }
 

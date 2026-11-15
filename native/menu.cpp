@@ -307,7 +307,11 @@ void GraphicsPage() {
             port::g_renderer = (port::g_renderer + 1) % 3;
             Save();
             LOGI("port: renderer %s, and it is the next start that uses it", kNames[port::g_renderer]);
-        }
+        }    }
+    if (!port::g_renderer_note.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.45f, 1.0f));
+        ImGui::TextWrapped("last time a GL renderer was asked for: %s", port::g_renderer_note.c_str());
+        ImGui::PopStyleColor();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
     ImGui::TextWrapped("OPENGL ES 3 draws the same game through the other renderer, and it takes the next start to "

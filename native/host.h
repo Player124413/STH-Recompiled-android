@@ -80,6 +80,8 @@ extern uint32_t g_safe_mode;
 // 0 Vulkan (the default), 1 OpenGL ES 3.0: read when the window and the device are made, so a change needs a restart
 extern uint32_t g_renderer;
 extern bool g_flip_front;
+// the last reason a GL renderer gave for not starting, empty when none tried
+extern std::string g_renderer_note;
 
 // touch controls
 extern bool g_touch_controls;

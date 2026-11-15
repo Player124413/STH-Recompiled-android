@@ -21,7 +21,9 @@ uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic r
 uint32_t g_renderer = 0;
 // the culling experiment: the two renderers disagree on which winding is a front face, and one frame each way on the
 // phone settles it faster than another build
-bool g_flip_front = false;      // 0 Vulkan, 1 OpenGL ES 3.0 -- Vulkan only for now, see CreateBackend()
+bool g_flip_front = false;
+// why a GL renderer did not start, as the menu shows it: the answer without a log file
+std::string g_renderer_note;      // 0 Vulkan, 1 OpenGL ES 3.0 -- Vulkan only for now, see CreateBackend()
 bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong
 uint32_t g_safe_mode = 1;     // 0 off, 1 every workaround, 2..7 just one of them (see SafePart in vulkan.cpp)
 uint32_t g_timeline_semaphores = 2;  // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences

@@ -59,6 +59,13 @@ using namespace gpu;
 
 namespace {
 
+// GL ES answers "OpenGL ES 3.2 ..." here, a desktop "4.3 (Core Profile) ..."
+bool version_is_es() {
+    const char* v = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    return v && std::strncmp(v, "OpenGL ES", 9) == 0;
+}
+
+
 constexpr uint64_t kStaleFrames = 8;  // frames a target may go unused and still be read back
 // the GLSL this renderer and gl/glsl.cpp make: a new name whenever any program's text changes (the shader list keeps
 // the programs of the last one); "2" is 0.2.0's
@@ -1391,8 +1398,12 @@ bool GlBackend::Init(uint32_t width, uint32_t height) {
     glGetIntegerv(GL_MINOR_VERSION, &minor);
     LOGI("gl: %s, %s, OpenGL %d.%d, guest %ux%u", reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
          reinterpret_cast<const char*>(glGetString(GL_RENDERER)), major, minor, width, height);
-    if (major * 10 + minor < 43) {
-        LOGE("gl: OpenGL 4.3 is needed");
+    // OpenGL ES 3.0 and up carries what this renderer asks for through the loader: the ES dialect of every shader
+    // (gl/glsl.cpp), no glPolygonMode, no glClearDepth, and glBufferStorage absent leaves the persistent-map path off.
+    // A desktop GL still has to be 4.3, which is what the generator was written for.
+    const bool es = version_is_es();
+    if (es ? (major * 10 + minor < 30) : (major * 10 + minor < 43)) {
+        LOGE("gl: OpenGL %s is needed", es ? "ES 3.0" : "4.3");
         return false;
     }
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &ubo_align_);
