@@ -252,7 +252,9 @@ int main(int, char**) {
     if (port::g_renderer == 1) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        // 3.1: the Spider-Man 2 renderer's shaders are #version 310 es. The older ES renderer asks nothing of the minor
+        // version, and a driver that offers only 3.0 still gets a context -- SDL falls back, the shaders then say so
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
     } else {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
