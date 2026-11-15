@@ -18,7 +18,7 @@ bool g_dynamic_res = true;      // the render resolution follows the frame rate
 uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the screen's height
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
 uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic rendering, 2 automatic (Mali: passes)
-uint32_t g_renderer = 0;      // 0 Vulkan, 1 OpenGL ES 3.0
+uint32_t g_renderer = 0;      // 0 Vulkan, 1 OpenGL ES 3.0 -- Vulkan only for now, see CreateBackend()
 bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong
 uint32_t g_timeline_semaphores = 2;  // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences
 bool g_touch_controls = true;
@@ -48,6 +48,9 @@ void Load(const void* table) {
     // a phone that has never drawn this game before starts on the workarounds: a picture that comes out right on a weak
     // driver is worth more than the few things safe graphics leaves out
     if (version < 3) g_safe_graphics = true;
+    // a file that still names the OpenGL ES renderer keeps Vulkan: the menu offers one renderer, and the window is
+    // created for it before any backend is built, so the choice has to be settled here and not at the end
+    g_renderer = 0;
     shadow::g_hd_scene = g_hd_scene;
     LOGI("port: settings version %lld, camera speed %u%%", (long long)version, g_camera_speed);
 }

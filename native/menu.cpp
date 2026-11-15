@@ -267,11 +267,6 @@ void GraphicsPage() {
         Save();
         LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
     }
-    if (Row("RENDERER", port::g_renderer == 1 ? "OPENGL ES" : "VULKAN", IM_COL32(240, 120, 110, 255), true)) {
-        port::g_renderer = port::g_renderer == 1 ? 0 : 1;
-        Save();
-        LOGI("port: renderer %s, takes effect on the next start", port::g_renderer == 1 ? "OpenGL ES" : "Vulkan");
-    }
     if (ToggleRow("SAFE GRAPHICS", port::g_safe_graphics)) {
         port::g_safe_graphics = !port::g_safe_graphics;
         Save();
@@ -289,9 +284,8 @@ void GraphicsPage() {
         LOGI("port: widescreen %s", g_widescreen ? "on, the picture fills the screen" : "off, the console's 4:3 with bars");
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
-    ImGui::TextWrapped("RENDERER switches between Vulkan and OpenGL ES. Both draw the same game and the same shaders; a "
-                       "phone whose Vulkan driver draws the picture wrong (a stretched model, say) can try OpenGL ES, "
-                       "which is a different driver path. Takes effect on the next start.");
+    ImGui::TextWrapped("Vulkan is the only renderer the menu offers for now. The OpenGL ES renderer is still in the "
+                       "build and is being worked on; it is not a choice here until it draws the game as Vulkan does.");
     ImGui::TextWrapped("SAFE GRAPHICS is the one to try first when the picture comes out wrong: the frame is drawn at the "
                        "console's own size, the glow composite and the extra upscale taps are skipped, and DXT is "
                        "unpacked here instead of in the driver.");
