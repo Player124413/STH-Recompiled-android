@@ -604,7 +604,9 @@ const char* SamplerType(const TexInfo& t) {
 
 }  // namespace
 
-const char* kFullScreenVertex = R"(#version 430 core
+const char* kFullScreenVertex = R"(#version 310 es
+precision highp float;
+precision highp int;
 out vec2 uv;
 void main() {
     vec2 t = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);

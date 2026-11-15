@@ -756,7 +756,9 @@ private:
 };
 
 // the full screen passes: an image to the screen through the gamma ramp, a depth copy
-const char* kBlitFragment = R"(#version 430 core
+const char* kBlitFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 in vec2 uv;
 layout(binding = 0) uniform sampler2D img;
 layout(binding = 1) uniform sampler2D lut;
@@ -775,7 +777,9 @@ void main() {
 )";
 // the frame onto the screen: rows flipped, through the gamma ramp, bilinear, an n x n box of bilinear taps when it
 // is drawn smaller (a 1080 picture on a 720 screen), Catmull-Rom when it is magnified and the picture is to be sharp
-const char* kPresentFragment = R"(#version 430 core
+const char* kPresentFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 in vec2 uv;
 layout(binding = 0) uniform sampler2D img;
 layout(binding = 1) uniform sampler2D lut;
@@ -816,7 +820,9 @@ void main() {
 )";
 // the same with a CRT's look: the CRT filter (crt.x 1 light, 2 strong) and the TV sides' tube (opts.w); a program of its
 // own, so the picture without them costs what it did before
-const char* kPresentCrtFragment = R"(#version 430 core
+const char* kPresentCrtFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 in vec2 uv;
 layout(binding = 0) uniform sampler2D img;
 layout(binding = 1) uniform sampler2D lut;
@@ -912,7 +918,9 @@ void main() {
 )";
 // a 4:3 picture's sides, over the whole screen before the picture goes in the middle: the picture zoomed to the
 // screen's width, blurred (a small mip level, nine taps) and dimmed; or a spider web drawn here, a corner each side
-const char* kSidesFragment = R"(#version 430 core
+const char* kSidesFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 in vec2 uv;
 layout(binding = 0) uniform sampler2D img;
 layout(binding = 1) uniform sampler2D lut;
@@ -1150,7 +1158,9 @@ void main() {
 )";
 // a depth buffer read as A8R8G8B8, as the console reads its D24S8 words: A Z[23:16], R Z[15:8], G Z[7:0], B the
 // stencil (left 0: no effect here reads it). The city's depth effects look the depth up through a dependent read.
-const char* kDepthColourFragment = R"(#version 430 core
+const char* kDepthColourFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 layout(binding = 0) uniform sampler2D depth;
 layout(location = 0) out vec4 o;
 void main() {
@@ -1158,7 +1168,9 @@ void main() {
     o = vec4(float((z >> 8) & 255u), float(z & 255u), 0.0, float(z >> 16)) / 255.0;
 }
 )";
-const char* kDepthFragment = R"(#version 430 core
+const char* kDepthFragment = R"(#version 310 es
+precision highp float;
+precision highp int;
 in vec2 uv;
 layout(binding = 0) uniform sampler2D img;
 void main() { gl_FragDepth = texture(img, uv).r; }
