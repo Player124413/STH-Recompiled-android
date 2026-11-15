@@ -29,7 +29,7 @@
 #define glCheckFramebufferStatus glapi::glCheckFramebufferStatus
 #define glClear glapi::glClear
 #define glClearColor glapi::glClearColor
-#define glClearDepth glapi::glClearDepth
+#define glClearDepth glapi::glClearDepthf  // ES has only the float form
 #define glClearStencil glapi::glClearStencil
 #define glClientWaitSync glapi::glClientWaitSync
 #define glColorMask glapi::glColorMask
@@ -90,7 +90,7 @@
 #define glMapBufferRange glapi::glMapBufferRange
 #define glPixelStorei glapi::glPixelStorei
 #define glPointSize glapi::glPointSize
-#define glPolygonMode glapi::glPolygonMode
+// glPolygonMode: no ES driver has it, and the renderer no longer asks
 #define glPolygonOffset glapi::glPolygonOffset
 #define glReadBuffer glapi::glReadBuffer
 #define glReadPixels glapi::glReadPixels

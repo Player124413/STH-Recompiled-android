@@ -31,7 +31,6 @@
     X(GLenum, glCheckFramebufferStatus, (GLenum))                                                                \
     X(void, glClear, (GLbitfield))                                                                               \
     X(void, glClearColor, (GLfloat, GLfloat, GLfloat, GLfloat))                                                  \
-    X(void, glClearDepth, (GLdouble))                                                                            \
     X(void, glClearStencil, (GLint))                                                                             \
     X(GLenum, glClientWaitSync, (GLsync, GLbitfield, GLuint64))                                                  \
     X(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))                                           \
@@ -90,7 +89,6 @@
     X(void*, glMapBufferRange, (GLenum, GLintptr, GLsizeiptr, GLbitfield))                                       \
     X(void, glPixelStorei, (GLenum, GLint))                                                                      \
     X(void, glPointSize, (GLfloat))                                                                              \
-    X(void, glPolygonMode, (GLenum, GLenum))                                                                     \
     X(void, glPolygonOffset, (GLfloat, GLfloat))                                                                 \
     X(void, glReadBuffer, (GLenum))                                                                              \
     X(void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*))                               \
@@ -121,6 +119,8 @@
 
 // newer than 4.3: used when the version or an extension says the driver has them
 #define GL_OPTIONAL_FUNCTIONS(X)                                                    \
+    /* ES spells the depth clear with an f, and only that one exists on a phone */                      \
+    X(void, glClearDepthf, (GLfloat))                                               \
     X(void, glBufferStorage, (GLenum, GLsizeiptr, const void*, GLbitfield))        \
     /* diagnostics: GLPROBE_RAW's vertex positions */                              \
     X(void, glTransformFeedbackVaryings, (GLuint, GLsizei, const char* const*, GLenum)) \

@@ -31,6 +31,8 @@ public:
                 return reinterpret_cast<void*>(SDL_GL_GetProcAddress(name));
             };
             const char* missing = nullptr;
+            // glPolygonMode and glClearDepth do not exist on any ES driver; the second is mapped to glClearDepthf below,
+            // and the first is not called any more, so both are loaded as optional and named in the log if absent
             if (!glapi::Load(get, &missing)) {
                 SDL_Log("gl43: this driver has no %s, so the renderer cannot run", missing ? missing : "entry point");
                 return false;
