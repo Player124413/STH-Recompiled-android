@@ -1,6 +1,7 @@
 // OpenGL renderer: the SDK's D3D12 renderer (sdk/runtime/gpu/d3d12.cpp) step for step, its render scale too (every
 // target the guest size times one scale across and one down, Picture::height), with the GL conventions of gl/glsl.cpp
 // (console row order in every target, depth sent as 2z - w).
+#include "gl_aliases.h"  // bare gl* calls become this port's loaded pointers, see the header
 #include "gl_backend.h"
 
 // What this port's SDK carries differently, gathered here so the renderer itself stays theirs: the reference harness's

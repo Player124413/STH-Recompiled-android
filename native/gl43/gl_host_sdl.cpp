@@ -35,11 +35,13 @@ public:
                 SDL_Log("gl43: this driver has no %s, so the renderer cannot run", missing ? missing : "entry point");
                 return false;
             }
+            // through the loader, not the prototypes glcorearb.h leaves behind: on Android there is no libGL to link
+            // them against, and a bare call is an undefined symbol at link time
             GLint major = 0, minor = 0;
-            glGetIntegerv(GL_MAJOR_VERSION, &major);
-            glGetIntegerv(GL_MINOR_VERSION, &minor);
+            glapi::glGetIntegerv(GL_MAJOR_VERSION, &major);
+            glapi::glGetIntegerv(GL_MINOR_VERSION, &minor);
             SDL_Log("gl43: OpenGL ES %d.%d, %s", int(major), int(minor),
-                    reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
+                    reinterpret_cast<const char*>(glapi::glGetString(GL_RENDERER)));
         } else if (SDL_GL_GetCurrentContext() != ctx_) {
             if (!SDL_GL_MakeCurrent(window_, ctx_)) {
                 SDL_Log("gl43: the context cannot be made current (%s)", SDL_GetError());
