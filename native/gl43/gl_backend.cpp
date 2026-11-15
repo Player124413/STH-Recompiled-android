@@ -2105,7 +2105,7 @@ void GlBackend::ApplyState(const State& s, const Assembled& a) {
     if (Changed(c.cull, int8_t(culled))) culled ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
     if (culled && Changed(c.cullface, GLenum(GL_BACK))) glCullFace(GL_BACK);
     uint32_t fill = s.rs[kRsFillMode];
-    if (Changed(c.poly, GLenum(fill == 0x1B01 ? GL_LINE : fill == 0x1B00 ? GL_POINT : GL_FILL))) glPolygonMode(GL_FRONT_AND_BACK, c.poly);
+    if (Changed(c.poly, GLenum(fill == 0x1B01 ? GL_LINE : fill == 0x1B00 ? GL_POINT : GL_FILL))) /* ES has no glPolygonMode: every primitive is filled (the console never asks for lines either) */
 }
 
 // The game's 16:9 picture: what it draws flat on a frame sized target (the HUD, menus, text) is kept 4:3 in the middle.
@@ -2908,7 +2908,7 @@ void GlBackend::Present(const Surface& front) {
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_CULL_FACE);
     glDisable(GL_POLYGON_OFFSET_FILL);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    /* ES has no glPolygonMode: every primitive is filled (the console never asks for lines either) */
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glViewport(0, 0, GLsizei(sw), GLsizei(sh));
     glClearColor(0, 0, 0, 1);
