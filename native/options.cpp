@@ -56,9 +56,9 @@ void Load(const void* table) {
     // on/off keeps what it had
     if (version < 5) g_safe_mode = g_safe_graphics ? 1 : 0;
     g_safe_graphics = g_safe_mode != 0;
-    // a file that still names the OpenGL ES renderer keeps Vulkan: the menu offers one renderer, and the window is
-    // created for it before any backend is built, so the choice has to be settled here and not at the end
-    g_renderer = 0;
+    // the renderer is the player's now: the window is created for it before any backend is built, so an unknown value
+    // has to fall back here and not at the end
+    if (g_renderer > 1) g_renderer = 0;
     shadow::g_hd_scene = g_hd_scene;
     LOGI("port: settings version %lld, camera speed %u%%", (long long)version, g_camera_speed);
 }

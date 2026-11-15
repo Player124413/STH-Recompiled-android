@@ -248,7 +248,7 @@ int main(int, char**) {
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title.c_str());
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, true);
-    // the GL ES window path is kept for the work on that renderer; the menu offers Vulkan only, so this is Vulkan
+    // the window carries the renderer the menu was set to: Vulkan by default, OpenGL ES 3 when it was asked for
     if (port::g_renderer == 1) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);

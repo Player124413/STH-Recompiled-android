@@ -3863,10 +3863,6 @@ VulkanBackend* g_vulkan = nullptr;
 }  // namespace
 
 std::unique_ptr<Backend> CreateBackend() {
-    // Vulkan draws every run. The OpenGL ES renderer is still built and still here for the work on it, but the menu does
-    // not offer it and a settings file that still names it does not start it: a picture that is wrong is worse than one
-    // renderer that is right
-    port::g_renderer = 0;
     auto backend = std::make_unique<VulkanBackend>();
     g_vulkan = backend.get();
     return backend;

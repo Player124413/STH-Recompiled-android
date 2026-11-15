@@ -299,9 +299,20 @@ void GraphicsPage() {
         Save();
         LOGI("port: widescreen %s", g_widescreen ? "on, the picture fills the screen" : "off, the console's 4:3 with bars");
     }
+    bool gl_renderer = port::g_renderer == 1;
+    if (ToggleRow("OPENGL ES 3 RENDERER", gl_renderer)) {
+        gl_renderer = !gl_renderer;
+        port::g_renderer = gl_renderer ? 1 : 0;
+        Save();
+        LOGI("port: renderer %s, and it is the next start that uses it",
+             gl_renderer ? "OpenGL ES 3" : "Vulkan");
+    }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));
-    ImGui::TextWrapped("Vulkan is the only renderer the menu offers for now. The OpenGL ES renderer is still in the "
-                       "build and is being worked on; it is not a choice here until it draws the game as Vulkan does.");
+    ImGui::TextWrapped("OPENGL ES 3 draws the same game through the other renderer, and it takes the next start to "
+                       "come up. Vulkan is the one that gets the work; OpenGL ES is here because a phone whose Vulkan "
+                       "driver is poor often has a GL one that is not, and on some Mali drivers that is exactly the "
+                       "case. Worth one try when Vulkan's picture is wrong, and the renderer's name is in the log "
+                       "either way (log line 'graphics: ...').");
     ImGui::TextWrapped("SAFE GRAPHICS is the one to try first when the picture comes out wrong: the frame is drawn at the "
                        "console's own size, the glow composite and the extra upscale taps are skipped, vertices are "
                        "converted here and DXT is unpacked here instead of in the driver. Tapping it again after ON "
