@@ -1904,6 +1904,11 @@ std::string GlesGraphicsInfo() { return g_gles ? "OpenGL ES 3.0, " + g_gles->Nam
 // ES 3.x context or lacks a function it needs, which the caller answers by keeping Vulkan.
 std::unique_ptr<gpu::Backend> CreateGl43Backend() {
     SDL_Window* window = host::Window();
-    if (!window) return nullptr;
+    if (!window) {
+        // the reason a GL renderer cannot even be tried, said where the menu shows it
+        port::g_renderer_note = "no window to draw into yet";
+        LOGE("graphics: the OpenGL renderer was asked for before the window existed");
+        return nullptr;
+    }
     return glr::CreateBackendOnWindow(window);
 }
