@@ -142,7 +142,7 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "gamma4";
+constexpr const char* kGlBuild = "blit";
 
 const char* kPresentVertex = R"(#version 300 es
 out vec2 v_uv;
@@ -1481,26 +1481,16 @@ void GlesBackend::Present(const Surface& front) {
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     if (t) {
-        if (gamma_ && !ramp_.empty()) {
-            std::vector<uint8_t> px(256 * 4);
-            for (int i = 0; i < 256; i++) {
-                px[size_t(i) * 4 + 0] = ramp_[size_t(i)];
-                px[size_t(i) * 4 + 1] = ramp_[256 + size_t(i)];
-                px[size_t(i) * 4 + 2] = ramp_[512 + size_t(i)];
-                px[size_t(i) * 4 + 3] = 255;
-            }
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, lut_);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        }
-        glUseProgram(present_);
-        if (gamma_loc_ >= 0) glUniform1i(gamma_loc_, gamma_ ? 1 : 0);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, t->img.tex);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, lut_);
-        glBindVertexArray(present_vao_);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        // the frame reaches the window as a blit of the target, which is the shortest path there is: no shader, no
+        // vertex buffer, no sampler and no gamma table in between, and one of those four is where a screen that stayed
+        // black while the frame behind it was full kept coming from. the target's rows are stored from its top and the
+        // window's from its bottom, so the rectangle is turned over as it goes in
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, t->fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        GLint x0 = GLint(std::lround(vx)), y0 = GLint(std::lround(vy));
+        GLint x1 = GLint(std::lround(vx + vw)), y1 = GLint(std::lround(vy + vh));
+        glBlitFramebuffer(0, 0, GLint(t->w), GLint(t->h), x0, y1, x1, y0, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
     CheckGl("the present pass");
     if (t && presents_ % 120 == 0) {
@@ -1606,7 +1596,8 @@ void GlesBackend::Present(const Surface& front) {
     // the frame's own numbers for the next panel, and the counters start again: the draws of the frame after this one
     // are the ones they will add up
     present_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_t0).count();
-    draw_ms_ = asm_ms_ = 0;
+    draw_ms_ = asm_ms_ = sh_ms_ = st_ms_ = 0;
+    tex_uploads_ = 0;
 }
 
 bool GlesBackend::Readback(Target& t, std::vector<uint8_t>& px) {
