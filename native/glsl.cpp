@@ -12,7 +12,7 @@
 #include "core/log.h"
 #include "vk_shader.h"
 
-namespace glsl {
+namespace glsl_es {
 
 namespace {
 
@@ -173,4 +173,4 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     return true;
 }
 
-}  // namespace glsl
+}  // namespace glsl_es

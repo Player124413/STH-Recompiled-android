@@ -140,7 +140,7 @@ struct Tex {
 
 struct Program {
     GLuint id = 0;
-    std::vector<glsl::Sampler> samplers;
+    std::vector<glsl_es::Sampler> samplers;
 };
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
@@ -257,7 +257,7 @@ class GlesBackend final : public Backend {
     void UploadTexture(Tex& tx, const TextureDesc& d, const uint32_t* colours);
     void ReleaseTexture(Tex& tx);
     // shaders
-    uint64_t Module(const std::string& hlsl, glsl::Stage stage, const char* entry);
+    uint64_t Module(const std::string& hlsl, glsl_es::Stage stage, const char* entry);
     Program* EnsureProgram(uint64_t vs, uint64_t ps);
     // state
     GLuint Bind(const Target* rt, const Target* ds);
@@ -287,7 +287,7 @@ class GlesBackend final : public Backend {
     int ramp_mean_[3] = {};
     int ramp_high_ = 0;
     std::vector<uint8_t> ramp_;
-    std::unordered_map<uint64_t, std::vector<glsl::Sampler>> sampler_units_;  // per shader module, until it is linked
+    std::unordered_map<uint64_t, std::vector<glsl_es::Sampler>> sampler_units_;  // per shader module, until it is linked
     std::unordered_map<uint64_t, GLuint> fbos_;  // a colour and a depth target drawn into together
     Assembled asm_;
     GLint gamma_loc_ = -1;
@@ -752,17 +752,17 @@ void GlesBackend::UploadTexture(Tex& tx, const TextureDesc& d, const uint32_t* c
 
 // ---- shaders
 
-uint64_t GlesBackend::Module(const std::string& hlsl, glsl::Stage stage, const char* entry) {
+uint64_t GlesBackend::Module(const std::string& hlsl, glsl_es::Stage stage, const char* entry) {
     // the shader cache on disk is keyed by this hash and the Vulkan renderer's entries live in the same folder: the GL
     // renderer's are tagged, so the two can never read each other's modules
     constexpr uint64_t kGlVertexSalt = 0x9A6C2F31D4B75E01ull, kGlPixelSalt = 0x4C1E8B27A9D3F605ull;
-    uint64_t seed = Hash(entry, std::strlen(entry), stage == glsl::Stage::Vertex ? kGlVertexSalt : kGlPixelSalt);
+    uint64_t seed = Hash(entry, std::strlen(entry), stage == glsl_es::Stage::Vertex ? kGlVertexSalt : kGlPixelSalt);
     uint64_t hash = Hash(hlsl.data(), hlsl.size(), seed);
     if (modules_.count(hash)) return hash;
     std::string code;
-    std::vector<glsl::Sampler> samplers;
-    if (!glsl::Compile(hlsl, entry, stage, hash, code, samplers)) return 0;
-    GLenum type = stage == glsl::Stage::Vertex ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
+    std::vector<glsl_es::Sampler> samplers;
+    if (!glsl_es::Compile(hlsl, entry, stage, hash, code, samplers)) return 0;
+    GLenum type = stage == glsl_es::Stage::Vertex ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
     GLuint sh = glCreateShader(type);
     const char* text = code.c_str();
     glShaderSource(sh, 1, &text, nullptr);
@@ -772,9 +772,9 @@ uint64_t GlesBackend::Module(const std::string& hlsl, glsl::Stage stage, const c
     if (!ok) {
         char log[2048] = {};
         glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
-        LOGE("gl: %s %s does not compile: %s", stage == glsl::Stage::Vertex ? "vertex" : "pixel", entry, log);
+        LOGE("gl: %s %s does not compile: %s", stage == glsl_es::Stage::Vertex ? "vertex" : "pixel", entry, log);
         if (problem_.empty()) {
-            problem_ = std::string(stage == glsl::Stage::Vertex ? "vertex" : "pixel") + " shader rejected: " + log;
+            problem_ = std::string(stage == glsl_es::Stage::Vertex ? "vertex" : "pixel") + " shader rejected: " + log;
             if (problem_.size() > 220) problem_.resize(220);
         }
         LOGE("%s", code.c_str());
@@ -820,11 +820,11 @@ Program* GlesBackend::EnsureProgram(uint64_t vs, uint64_t ps) {
             LOG_FIRST(2, "gl: a program names its constant blocks differently (VC %s, DC %s)",
                       vc == GL_INVALID_INDEX ? "missing" : "found", dc == GL_INVALID_INDEX ? "missing" : "found");
         for (const auto& list : {sampler_units_[vs], sampler_units_[ps]})
-            for (const glsl::Sampler& s : list) {
+            for (const glsl_es::Sampler& s : list) {
                 GLint at = glGetUniformLocation(p.id, s.name.c_str());
                 if (at >= 0) glUniform1i(at, GLint(s.unit));
                 bool known = false;
-                for (const glsl::Sampler& have : p.samplers) known = known || have.name == s.name;
+                for (const glsl_es::Sampler& have : p.samplers) known = known || have.name == s.name;
                 if (!known) p.samplers.push_back(s);
             }
         glUseProgram(0);
@@ -1102,7 +1102,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
         }
     }
     auto sh_t0 = std::chrono::steady_clock::now();
-    sh.vh = Module(vs, glsl::Stage::Vertex, entry);
+    sh.vh = Module(vs, glsl_es::Stage::Vertex, entry);
     auto stage_t0 = std::chrono::steady_clock::now();
     DrawTextures stages;
     if (!BindStageTextures(s, stages)) return;
@@ -1111,7 +1111,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
     sh.pkey = Hash(&pk, sizeof(pk));
-    sh.ph = Module(PixelHlsl(pk), glsl::Stage::Pixel, "main");
+    sh.ph = Module(PixelHlsl(pk), glsl_es::Stage::Pixel, "main");
     if (!sh.vh || !sh.ph) return;
     Program* prog = EnsureProgram(sh.vh, sh.ph);
     sh_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sh_t0).count();

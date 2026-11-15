@@ -6,7 +6,7 @@
 // The same HLSL the Vulkan renderer takes, through SPIR-V and out again as GLSL ES 3.00 for the OpenGL ES renderer.
 // One source of truth for both: a shader is written once in shaders.cpp and every renderer sees the same maths, which is
 // the whole point of the port.
-namespace glsl {
+namespace glsl_es {
 
 enum class Stage { Vertex, Pixel };
 
@@ -21,4 +21,4 @@ struct Sampler {
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::string& out,
              std::vector<Sampler>& samplers);
 
-}  // namespace glsl
+}  // namespace glsl_es
