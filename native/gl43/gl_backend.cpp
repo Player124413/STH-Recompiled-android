@@ -3,6 +3,22 @@
 // (console row order in every target, depth sent as 2z - w).
 #include "gl_backend.h"
 
+// What this port's SDK carries differently, gathered here so the renderer itself stays theirs: the reference harness's
+// ScreenBox (only their test build has it: a small draw keeps the whole box), the extra argument their input assembler
+// takes (the quad path, which this port settles inside Assemble), and the render thread pointer.
+// the render thread this port runs elsewhere: kept null, so the renderer's own perf block is simply skipped
+struct RenderThreadStub {};
+inline RenderThreadStub* g_render_thread = nullptr;
+namespace reference {
+template <class... A> inline bool ScreenBox(A...) { return false; }
+}  // namespace reference
+namespace gpu {
+template <class... X> inline bool Assemble(const State& s, uint32_t p, uint32_t st, uint32_t c, const uint8_t* i, const X&...) {
+    return Assemble(s, p, st, c, i);
+}
+}  // namespace gpu
+
+
 #include <algorithm>
 #include <array>
 #include <chrono>
