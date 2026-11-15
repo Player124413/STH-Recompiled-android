@@ -30,7 +30,12 @@ std::string F(const char* fmt, ...) {
     return buf;
 }
 
-const char* kHead = "#version 430 core\n";
+// GLSL ES 3.10, the dialect a phone driver compiles. Their generator was written for OpenGL 4.3 core, which is what
+// the Switch's Mesa offers and what Android does not: ES 3.2 is the ceiling. The text below is the same generator
+// either way, and the differences that matter are two -- ES wants a precision for float in a fragment shader, and it
+// refuses a sampler array indexed at run time. The second does not arise here: every stage is its own named sampler
+// (tex0, tex1, ...), chosen while the shader is generated, never indexed in the shader.
+const char* kHead = "#version 310 es\nprecision highp float;\nprecision highp int;\n";
 
 // both uniform blocks, laid out as s.vsc and gpu::DrawConstants
 const char* kUniforms = R"(
