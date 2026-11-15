@@ -7,8 +7,6 @@
 // holds those verbatim). Where GL ES 3.00 cannot express something the picture differs, and each such place says so.
 #include <SDL3/SDL.h>
 
-#include "gl43/gl_backend.h"  // the Spider-Man 2 renderer, taken whole
-
 #include <GLES3/gl3.h>
 #include <dxgiformat.h>  // the host vertex formats the guest's declarations name, as the Vulkan backend takes them
 
@@ -1897,10 +1895,3 @@ void GlesGraphicsReport() {
 std::string GlesGraphicsInfo() { return g_gles ? "OpenGL ES 3.0, " + g_gles->Name() : std::string("no renderer"); }
 }  // namespace gpu
 
-// The Spider-Man 2 renderer (native/gl43): their backend, whole, on this port's window. nullptr when the driver has no
-// ES 3.x context or lacks a function it needs, which the caller answers by keeping Vulkan.
-std::unique_ptr<gpu::Backend> CreateGl43Backend() {
-    SDL_Window* window = host::Window();
-    if (!window) return nullptr;
-    return glr::CreateBackendOnWindow(window);
-}

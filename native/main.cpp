@@ -249,14 +249,12 @@ int main(int, char**) {
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title.c_str());
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, true);
     // the window carries the renderer the menu was set to: Vulkan by default, OpenGL ES 3 when it was asked for
-    if (port::g_renderer != 0) {
+    if (port::g_renderer == 1) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
         // 3.1: the Spider-Man 2 renderer's shaders are #version 310 es. The older ES renderer asks nothing of the minor
         // version, and a driver that offers only 3.0 still gets a context -- SDL falls back, the shaders then say so
-        // 3.2 for the Spider-Man 2 renderer (it names glDrawElementsBaseVertex and glCopyImageSubData, ES 3.2), 3.0's
-        // newer sibling for the port's own one
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, port::g_renderer == 2 ? 2 : 1);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
     } else {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
