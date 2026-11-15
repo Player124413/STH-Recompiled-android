@@ -19,7 +19,7 @@ uint32_t g_min_percent = 40;    // dynamic resolution's floor, percent of the sc
 uint32_t g_texture_filter = 0;  // 0 linear, 1 point
 uint32_t g_dynamic_rendering = 0;  // 0 render passes (the default), 1 dynamic rendering, 2 automatic (Mali: passes)
 uint32_t g_renderer = 0;      // 0 Vulkan, 1 OpenGL ES 3.0 -- Vulkan only for now, see CreateBackend()
-bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong
+bool g_safe_graphics = false;  // every workaround at once, for a phone whose picture comes out wrong
 uint32_t g_timeline_semaphores = 2;  // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences
 bool g_touch_controls = true;
 bool g_vibration = true;
@@ -36,7 +36,7 @@ namespace port {
 const char* VersionName() { return SHADOW_ANDROID_VERSION; }
 
 // Bumped when a default changes in a way an old file should not keep.
-constexpr int64_t kPortVersion = 3;
+constexpr int64_t kPortVersion = 4;
 
 void Load(const void* table) {
     const auto* t = static_cast<const toml::table*>(table);  // the scalars come through app::kGame.options
@@ -48,6 +48,10 @@ void Load(const void* table) {
     // a phone that has never drawn this game before starts on the workarounds: a picture that comes out right on a weak
     // driver is worth more than the few things safe graphics leaves out
     if (version < 3) g_safe_graphics = true;
+    // 4: the workarounds are off unless asked for. Two phones that draw the whole picture (Adreno 710, Mali-G57) said
+    // what the fallback costs: 480 lines on a 720 line screen, no glow, no HD scene -- a first look at the port that
+    // reads as graphical bugs, on a driver that had none
+    if (version < 4) g_safe_graphics = false;
     // a file that still names the OpenGL ES renderer keeps Vulkan: the menu offers one renderer, and the window is
     // created for it before any backend is built, so the choice has to be settled here and not at the end
     g_renderer = 0;
@@ -71,7 +75,7 @@ void ResetDefaults() {
     g_texture_filter = 0;
     g_dynamic_rendering = 0;
     g_timeline_semaphores = 2;
-    g_safe_graphics = true;
+    g_safe_graphics = false;
     g_touch_controls = true;
     g_vibration = true;
     g_camera_speed = 200;
