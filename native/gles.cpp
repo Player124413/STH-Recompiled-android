@@ -142,7 +142,7 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "gamma3";
+constexpr const char* kGlBuild = "gamma4";
 
 const char* kPresentVertex = R"(#version 300 es
 out vec2 v_uv;
@@ -282,6 +282,9 @@ class GlesBackend final : public Backend {
     static constexpr const char* kPhaseName[7] = {"as drawn",   "no cull",    "front flipped", "no depth test",
                                                   "no blend",   "all channels", "all of it"};
     double asm_ms_ = 0, draw_ms_ = 0, present_ms_ = 0;  // this frame's CPU time, and where it went
+    double sh_ms_ = 0, st_ms_ = 0;                      // of the draws: shaders and stage textures
+    unsigned tex_uploads_ = 0;                          // textures the draws had to send again
+    int empty_frames_ = 0;                              // measurements in a row with nothing in the frame
     // where the present pass puts the console's picture, and what the drawable underneath actually is: a picture that
     // does not fill the phone is one of these two numbers disagreeing
     int32_t present_vp_[4] = {};
@@ -851,7 +854,10 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
             key = Hash(more, sizeof(more), key);
             Tex* tx = EnsureTexture(d, key);
             if (!tx) continue;
-            if (tx->epoch != DirtyEpoch(d.data)) UploadTexture(*tx, d, palette.va ? palette.colours : nullptr);
+            if (tx->epoch != DirtyEpoch(d.data)) {
+                UploadTexture(*tx, d, palette.va ? palette.colours : nullptr);
+                tex_uploads_++;
+            }
             tex = tx->img.tex;
             levels = tx->levels;
             if (d.cube || d.depth > 1) {
@@ -912,9 +918,12 @@ bool GlesBackend::BindStageTextures(const State& s, DrawTextures& stages) {
 // the game wrote into the target's memory from the CPU since the GPU last drew it: the GPU's copy is the stale one
 void GlesBackend::Latch(Target& t) {
     if (t.depth || !t.data) return;
+    // a page the CPU has not written since the GPU last took this target has nothing to upload, and asking is free
+    uint64_t e = DirtyEpoch(t.data);
+    if (e <= t.epoch) return;
     uint64_t sig = MemSig(t.data, t.bytes);
+    t.epoch = e;
     if (sig == t.sig) return;
-    t.epoch = DirtyEpoch(t.data);
     t.sig = sig;
     Surface su;
     su.data = t.data;
@@ -1031,9 +1040,12 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
             entry = "main_points";
         }
     }
+    auto sh_t0 = std::chrono::steady_clock::now();
     sh.vh = Module(vs, glsl::Stage::Vertex, entry);
+    auto stage_t0 = std::chrono::steady_clock::now();
     DrawTextures stages;
     if (!BindStageTextures(s, stages)) return;
+    st_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - stage_t0).count();
     CheckGl("the stage textures");
     PixelKey pk = MakePixelKey(s, stages.info);
     pk.quad = sh.quad;
@@ -1041,6 +1053,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
     sh.ph = Module(PixelHlsl(pk), glsl::Stage::Pixel, "main");
     if (!sh.vh || !sh.ph) return;
     Program* prog = EnsureProgram(sh.vh, sh.ph);
+    sh_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sh_t0).count();
     if (!prog) return;
     CheckGl("the shader program");
 
@@ -1521,11 +1534,15 @@ void GlesBackend::Present(const Surface& front) {
         // in a log the player would have to find: a shader the driver rejected, or a frame nothing was drawn into
         std::string banner = problem_;
         if (banner.empty() && draws_ == 0 && presents_ > 60) banner = "no draw has reached the screen yet";
-        if (banner.empty() && frame_black_ && depth_read_ && depth_lit_ == 0 && presents_ > 120)
+        if (frame_black_)
+            empty_frames_++;
+        else
+            empty_frames_ = 0;
+        if (banner.empty() && empty_frames_ >= 2 && depth_read_ && depth_lit_ == 0 && presents_ > 120)
             banner = "nothing the game draws lands in its frame: no colour and no depth";
-        if (banner.empty() && frame_black_ && depth_lit_ > 0 && presents_ > 120)
+        if (banner.empty() && empty_frames_ >= 2 && depth_lit_ > 0 && presents_ > 120)
             banner = "the frame has geometry but no colour: the pixel path writes black";
-        if (banner.empty() && frame_black_ && presents_ > 120) banner = "the frame the game draws holds no pixel";
+        if (banner.empty() && empty_frames_ >= 2 && presents_ > 120) banner = "the frame the game draws holds no pixel";
         // a driver that does not answer for the window surface reports it empty whatever is on the screen, so this is
         // only worth saying when the target has a picture to show and the screen still has none
         if (banner.empty() && !frame_black_ && window_black_ && presents_ > 120)
@@ -1559,8 +1576,13 @@ void GlesBackend::Present(const Surface& front) {
                             scene_draws_, drawn_ds_);
             ImGui::Text("gamma %s, ramp means %d %d %d, high %d", gamma_ ? "on" : "off", ramp_mean_[0], ramp_mean_[1],
                         ramp_mean_[2], ramp_high_);
-            ImGui::Text("build %s, cpu draw %.1f ms (vertices %.1f), present %.1f ms", kGlBuild, draw_ms_, asm_ms_,
-                        present_ms_);
+            ImGui::Text("build %s, cpu draw %.1f ms = shaders %.1f, stages %.1f (%u uploads), rest %.1f; vertices "
+                        "%.1f, present %.1f",
+                        kGlBuild, draw_ms_, sh_ms_, st_ms_, tex_uploads_, std::max(0.0, draw_ms_ - sh_ms_ - st_ms_),
+                        asm_ms_, present_ms_);
+            // a target made and cleared per draw would cost exactly this and leave a frame of nothing behind it
+            ImGui::Text("targets made %u, textures %u, programs %u", drawn_targets_, unsigned(textures_.size()),
+                        programs_built_ / 2);
             ImGui::Text("present %dx%d at %d,%d, widescreen %s, drawable %dx%d", present_vp_[2], present_vp_[3],
                         present_vp_[0], present_vp_[1], present_wide_ ? "on" : "off", drawable_[0], drawable_[1]);
             ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
