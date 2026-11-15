@@ -35,6 +35,7 @@ const app::GameInfo app::kGame = {
                 {"dynamic_rendering", nullptr, &port::g_dynamic_rendering},
                 {"timeline_semaphores", nullptr, &port::g_timeline_semaphores},
                 {"safe_graphics", &port::g_safe_graphics, nullptr},
+                {"safe_mode", nullptr, &port::g_safe_mode},
                 {"renderer", nullptr, &port::g_renderer},
                 {"min_render_percent", nullptr, &port::g_min_percent},
                 {"camera_speed", nullptr, &port::g_camera_speed}},

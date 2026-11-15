@@ -255,6 +255,21 @@ const char* SyncName() {
     }
 }
 
+// the workarounds one at a time, for a picture that needs one and not the rest
+const char* SafeModeName() {
+    switch (port::g_safe_mode) {
+        case 0: return "OFF";
+        case 1: return "ON";
+        case 2: return "ONLY CPU VERTEX PATH";
+        case 3: return "ONLY ONE UPSCALE TAP";
+        case 4: return "ONLY NO GLOW";
+        case 5: return "ONLY NO HD SCENE";
+        case 6: return "ONLY CONSOLE SIZE";
+        case 7: return "ONLY CPU DXT";
+        default: return "ON";
+    }
+}
+
 void GraphicsPage() {
     Section("THE PORT");
     if (ToggleRow("HD 3D WORLD", port::g_hd_scene)) {
@@ -267,10 +282,11 @@ void GraphicsPage() {
         Save();
         LOGI("port: dynamic rendering %s, takes effect on the next start", DynamicRenderingName());
     }
-    if (ToggleRow("SAFE GRAPHICS", port::g_safe_graphics)) {
-        port::g_safe_graphics = !port::g_safe_graphics;
+    if (Row("SAFE GRAPHICS", SafeModeName(), IM_COL32(240, 120, 110, 255), true)) {
+        port::g_safe_mode = (port::g_safe_mode + 1) % 8;
+        port::g_safe_graphics = port::g_safe_mode != 0;
         Save();
-        LOGI("port: safe graphics %s", port::g_safe_graphics ? "on" : "off");
+        LOGI("port: safe graphics %s", SafeModeName());
     }
     if (Row("GPU SYNC", SyncName(), IM_COL32(240, 120, 110, 255), true)) {
         port::g_timeline_semaphores = (port::g_timeline_semaphores + 1) % 4;  // automatic -> timeline -> fences -> strict
@@ -287,8 +303,10 @@ void GraphicsPage() {
     ImGui::TextWrapped("Vulkan is the only renderer the menu offers for now. The OpenGL ES renderer is still in the "
                        "build and is being worked on; it is not a choice here until it draws the game as Vulkan does.");
     ImGui::TextWrapped("SAFE GRAPHICS is the one to try first when the picture comes out wrong: the frame is drawn at the "
-                       "console's own size, the glow composite and the extra upscale taps are skipped, and DXT is "
-                       "unpacked here instead of in the driver.");
+                       "console's own size, the glow composite and the extra upscale taps are skipped, vertices are "
+                       "converted here and DXT is unpacked here instead of in the driver. Tapping it again after ON "
+                       "leaves one of those on and the rest off: a picture that one workaround fixes names the part of "
+                       "the renderer this driver does differently, and that part is what gets fixed.");
     ImGui::PopStyleColor();
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {

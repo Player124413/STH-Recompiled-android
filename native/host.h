@@ -71,7 +71,10 @@ extern uint32_t g_texture_filter;  // 0 linear, 1 point
 extern uint32_t g_dynamic_rendering;
 // 2 automatic (fences on ARM Mali), 1 timeline semaphores, 0 fences; read when the device is made
 extern uint32_t g_timeline_semaphores;
-extern bool g_safe_graphics;
+extern bool g_safe_graphics;   // true for any mode but off
+// which workarounds this run does: 0 every one off, 1 every one on, 2..7 just the one the mode names. A picture that a
+// single workaround fixes says which part of the renderer the driver does not do the way this one assumes
+extern uint32_t g_safe_mode;
 // 0 Vulkan (the default), 1 OpenGL ES 3.0: read when the window and the device are made, so a change needs a restart
 extern uint32_t g_renderer;
 
