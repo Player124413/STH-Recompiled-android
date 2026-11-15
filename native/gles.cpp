@@ -1385,7 +1385,7 @@ void GlesBackend::Present(const Surface& front) {
     Target* t = EnsureTarget(front, false);
     // the experiments run on their own, one piece of state every twenty frames: the frame each one produces is
     // measured when it ends, and the panel holds the results side by side
-    int phase = int((presents_ / 20) % 7);
+    int phase = presents_ < 7 * 20 ? int((presents_ / 20) % 7) : 0;
     if (phase != phase_) {
         if (phase_ >= 0 && t) {
             FrameStats(*t);
@@ -1402,6 +1402,18 @@ void GlesBackend::Present(const Surface& front) {
         window_h_ = uint32_t(win_h);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // this frame's vertices and indices get storage of their own: a driver handed the same buffer every frame has to
+    // wait for the last one to finish reading it, and orphaning it here is what keeps the frame from stalling on that
+    if (vbo_size_) {
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbo_size_), nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    if (ibo_size_) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibo_size_), nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    }
     // the console's picture on the phone's screen: edge to edge when the game is widened for the wider screen, and its
     // own 4:3 with black bars beside it when it is not, the same rule the Vulkan renderer's present pass keeps
     float w = float(std::max(window_w_, 1u)), h = float(std::max(window_h_, 1u));
@@ -1451,7 +1463,7 @@ void GlesBackend::Present(const Surface& front) {
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     CheckGl("the present pass");
-    if (t && presents_ % 60 == 0) {
+    if (t && presents_ % 120 == 0) {
         // is the picture we are showing actually empty? how much of the same target is not black answers it, and a
         // black screen with nothing else to go on is exactly the question this renderer has been asked
         FrameStats(*t);
@@ -1526,10 +1538,9 @@ void GlesBackend::Present(const Surface& front) {
             if (t) {
                 ImGui::Text("the frame the game draws:");
 #if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19200
-                ImGui::Image(ImTextureRef(ImTextureID(t->img.tex)), ImVec2(256.0f, 192.0f), ImVec2(0.0f, 1.0f),
-                             ImVec2(1.0f, 0.0f));
+                ImGui::Image(ImTextureRef(ImTextureID(t->img.tex)), ImVec2(256.0f, 192.0f));
 #else
-                ImGui::Image(ImTextureID(t->img.tex), ImVec2(256.0f, 192.0f), ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+                ImGui::Image(ImTextureID(t->img.tex), ImVec2(256.0f, 192.0f));
 #endif
             }
             ImGui::End();
@@ -1600,10 +1611,20 @@ void GlesBackend::Sync(uint32_t data, uint32_t) {
 }
 
 void GlesBackend::SetGamma(const uint8_t* ramp) {
+    ramp_.assign(ramp, ramp + 256 * 3);
     bool identity = true;
     for (int i = 0; i < 256 && identity; i++) identity = ramp[i] == i && ramp[256 + i] == i && ramp[512 + i] == i;
-    ramp_.assign(ramp, ramp + 256 * 3);
-    gamma_ = !identity;
+    // a ramp that maps a channel to black everywhere is a black screen with a full frame behind it, and the console
+    // reads the ramp it wants; a title hands over one of zeros while it fades, and that is not a picture to show
+    bool usable = true;
+    for (int c = 0; c < 3; c++) {
+        int high = 0;
+        for (int i = 0; i < 256; i++) high = std::max(high, int(ramp[c * 256 + i]));
+        if (high <= 8) usable = false;
+    }
+    gamma_ = !identity && usable;
+    LOG_FIRST(2, "gl: gamma ramp %s (ends %u %u %u)", gamma_ ? "applied" : identity ? "identity" : "all black, ignored",
+              unsigned(ramp[0]), unsigned(ramp[255]), unsigned(ramp[512 + 255]));
 }
 
 // a black screen with one error code in the log says nothing; the step it came from says everything
