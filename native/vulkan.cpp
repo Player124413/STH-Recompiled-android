@@ -915,6 +915,10 @@ public:
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
     void DumpFrame() { dump_left_ = 1; }
+    // the draws of the next frame, with the constants each one reads: a model that comes out smeared is a vertex path
+    // fed the wrong matrices, and this writes down which draw got what instead of leaving it to a picture
+    void DumpDraws() { draws_left_ = 40; draws_text_.clear(); }
+    void WriteDraws();
     // the next draws of the frame, with the constants they read: a smeared model is a vertex path fed the wrong
     // matrices, and this is the only way to see which draw got what instead of reading a screenshot
     std::string Info() const;
@@ -1165,6 +1169,8 @@ private:
     // what the frames asked of the GPU; Report() puts it in the log, once early and once the title is running, and
     // whenever the player asks from the menu. A wrong picture on one driver and not another is told apart here
     int dump_left_ = 0;  // the frames still to be written out as PNGs, from the menu's DUMP FRAME
+    int draws_left_ = 0;  // draws still to be written down, from the menu's DUMP DRAWS
+    std::string draws_text_;
     uint64_t diag_draws_ = 0, diag_points_ = 0, diag_sprites_ = 0, diag_wide_ = 0, diag_feedback_ = 0,
              diag_targets_ = 0, diag_flushes_ = 0, diag_pipes_ = 0, diag_uploads_ = 0;
     VkPhysicalDeviceFeatures caps_{};  // everything the GPU offers, for the report
@@ -2786,6 +2792,24 @@ std::string VulkanBackend::Info() const {
 
 // the colour targets of the frame before this one, the largest first, into dumps/ beside the settings: a picture that
 // comes out wrong, pass by pass, instead of guessed at from a screenshot
+// the draws written down: plain files out, no stream of its own to include, and the folder is the one DUMP FRAME uses
+void VulkanBackend::WriteDraws() {
+    if (draws_text_.empty()) return;
+    std::error_code ec;
+    std::filesystem::path dir = app::ExeDir() / "dumps";
+    std::filesystem::create_directories(dir, ec);
+    std::string path = (dir / "draws.txt").string();
+    if (std::FILE* out = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(draws_text_.data(), 1, draws_text_.size(), out);
+        std::fclose(out);
+        LOGI("vulkan: the draws and the constants they read are in dumps/draws.txt (%zu bytes, all of it)",
+             draws_text_.size());
+    } else {
+        LOGE("vulkan: dumps/draws.txt cannot be written (%s)", path.c_str());
+    }
+    draws_text_.clear();
+}
+
 void VulkanBackend::DumpTargets() {
     std::error_code ec;
     std::filesystem::path dir = app::ExeDir() / "dumps";
@@ -3160,6 +3184,20 @@ int DrawHudPiece(const State& s, const Assembled& a, bool prog, uint32_t w) {
 
 void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
     diag_draws_++;
+    if (draws_left_ > 0) {
+        draws_left_--;
+        char line[256];
+        std::snprintf(line, sizeof(line), "draw %llu: primitive %u, first %u, count %u, indices %s\n",
+                      (unsigned long long)diag_draws_, prim, start, count, indices ? "yes" : "no");
+        draws_text_ += line;
+        const uint32_t regs = s.vsc.size() < 96 ? uint32_t(s.vsc.size()) : 96;  // where a bone palette lives
+        for (uint32_t r = 0; r < regs; r++) {
+            std::snprintf(line, sizeof(line), "  c%-3u %11.4f %11.4f %11.4f %11.4f\n", r, s.vsc[r][0], s.vsc[r][1],
+                          s.vsc[r][2], s.vsc[r][3]);
+            draws_text_ += line;
+        }
+        if (draws_left_ == 0) WriteDraws();
+    }
     if (DepthCopy(s)) return;
     Assembled& a = asm_;
     if (!Assemble(s, prim, start, count, indices, a)) return;
@@ -3843,6 +3881,10 @@ void GraphicsReport() {
     else GlesGraphicsReport();
 }
 
+void DumpDraws() {
+    if (g_vulkan) g_vulkan->DumpDraws();
+}
+
 void DumpFrame() {
     if (g_vulkan) g_vulkan->DumpFrame();
 }
@@ -3855,4 +3897,9 @@ namespace host {
 void GraphicsReport() { gpu::GraphicsReport(); }
 void DumpFrame() { gpu::DumpFrame(); }
 std::string GraphicsInfo() { return gpu::GraphicsInfo(); }
+}  // namespace host
+
+namespace host {
+// the menu's DUMP DRAWS: the renderer collects the next draws, this hands them the request
+void DumpDraws() { gpu::DumpDraws(); }
 }  // namespace host

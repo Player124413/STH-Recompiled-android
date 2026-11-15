@@ -348,7 +348,9 @@ public class MainActivity extends SDLActivity {
             ArrayList<Uri> uris = new ArrayList<>();
             if (files != null) {
                 for (File f : files) {
-                    if (!f.isFile() || !f.getName().toLowerCase().endsWith(".png")) continue;
+                    // the frame's PNGs and the dump of the draws: a smeared model needs both to be read
+                    String name = f.getName().toLowerCase();
+                    if (!f.isFile() || (!name.endsWith(".png") && !name.endsWith(".txt"))) continue;
                     uris.add(new Uri.Builder().scheme("content").authority(getPackageName() + ".frames")
                             .appendPath(f.getName()).build());
                 }
@@ -358,7 +360,7 @@ public class MainActivity extends SDLActivity {
                 return;
             }
             Intent i = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE);
-            i.setType("image/png");
+            i.setType("*/*");  // pictures and the draw log together
             if (uris.size() == 1) i.putExtra(Intent.EXTRA_STREAM, uris.get(0));
             else i.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
