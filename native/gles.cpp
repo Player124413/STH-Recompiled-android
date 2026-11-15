@@ -143,7 +143,7 @@ struct Program {
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
 // the build this file is, on the screen: a screenshot then says which one the phone is running
-constexpr const char* kGlBuild = "ring";
+constexpr const char* kGlBuild = "ramp";
 
 // a frame's constants go into a ring rather than one block: a draw that overwrites the block the GPU is still reading
 // makes the driver wait for it, and that wait was most of what a frame cost
@@ -227,6 +227,8 @@ class GlesBackend final : public Backend {
     void Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) override;
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override;
     void Present(const Surface& front) override;
+    bool UploadRamp();
+    bool PresentPass(Target& t);
     void FrameStats(Target& t);
     bool MakeDepthProbe();
     void Sync(uint32_t data_va, uint32_t size) override;
@@ -276,6 +278,9 @@ class GlesBackend final : public Backend {
     size_t vbo_size_ = 0, ibo_size_ = 0;
     GLuint ubo_[2] = {};
     GLuint present_ = 0, lut_ = 0;
+    GLuint present_fbo_ = 0, present_tex_ = 0;  // where the ramp is applied, before the blit to the window
+    uint32_t present_w_ = 0, present_h_ = 0;
+    bool ramp_dirty_ = true;
     bool gamma_ = false;
     int ramp_mean_[3] = {};
     int ramp_high_ = 0;
@@ -1497,6 +1502,75 @@ void GlesBackend::FrameStats(Target& t) {
     }
 }
 
+// the game's gamma ramp, as a 256 wide table: the console's colour space on the phone's screen, and the one thing the
+// Vulkan backend's present pass does that a plain blit cannot. A ramp that is the identity leaves the blit alone
+bool GlesBackend::UploadRamp() {
+    if (!ramp_dirty_ || !lut_) return false;
+    ramp_dirty_ = false;
+    std::vector<uint8_t> px(256 * 4);
+    for (int i = 0; i < 256; i++) {
+        px[size_t(i) * 4 + 0] = ramp_[size_t(i)];
+        px[size_t(i) * 4 + 1] = ramp_[256 + size_t(i)];
+        px[size_t(i) * 4 + 2] = ramp_[512 + size_t(i)];
+        px[size_t(i) * 4 + 3] = 255;
+    }
+    glBindTexture(GL_TEXTURE_2D, lut_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    return gamma_;
+}
+
+// the frame with the ramp on it, drawn into a target the size of the frame: the window is still reached by the blit
+// that made the picture show, and this pass only changes its colours
+bool GlesBackend::PresentPass(Target& t) {
+    if (!present_ || !present_vao_ || !t.img.tex || !gamma_) return false;
+    if (present_tex_ == 0) {
+        glGenTextures(1, &present_tex_);
+        glBindTexture(GL_TEXTURE_2D, present_tex_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &present_fbo_);
+    }
+    if (present_w_ != t.w || present_h_ != t.h) {
+        present_w_ = t.w;
+        present_h_ = t.h;
+        GLint prev = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
+        glBindTexture(GL_TEXTURE_2D, present_tex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GLsizei(t.w), GLsizei(t.h), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, present_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, present_tex_, 0);
+        bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, GLuint(prev));
+        if (!ok) {
+            present_w_ = present_h_ = 0;
+            LOGE("gl: the ramp target does not complete, the frame goes to the window blitted as it is");
+            return false;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, present_fbo_);
+    glViewport(0, 0, GLsizei(t.w), GLsizei(t.h));
+    glUseProgram(present_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, t.img.tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, lut_);
+    glUniform1i(gamma_loc_, 1);
+    glBindVertexArray(present_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    CheckGl("the ramp pass");
+    return true;
+}
+
 void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
     auto present_t0 = std::chrono::steady_clock::now();
@@ -1583,7 +1657,9 @@ void GlesBackend::Present(const Surface& front) {
         // vertex buffer, no sampler and no gamma table in between, and one of those four is where a screen that stayed
         // black while the frame behind it was full kept coming from. the target's rows are stored from its top and the
         // window's from its bottom, so the rectangle is turned over as it goes in
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, t->fbo);
+        UploadRamp();
+        bool ramped = PresentPass(*t);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ramped ? present_fbo_ : t->fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         GLint x0 = GLint(std::lround(vx)), y0 = GLint(std::lround(vy));
         GLint x1 = GLint(std::lround(vx + vw)), y1 = GLint(std::lround(vy + vh));
@@ -1758,6 +1834,7 @@ void GlesBackend::Sync(uint32_t data, uint32_t) {
 
 void GlesBackend::SetGamma(const uint8_t* ramp) {
     ramp_.assign(ramp, ramp + 256 * 3);
+    ramp_dirty_ = true;
     bool identity = true;
     for (int i = 0; i < 256 && identity; i++) identity = ramp[i] == i && ramp[256 + i] == i && ramp[512 + i] == i;
     // a ramp that maps a channel to black everywhere is a black screen with a full frame behind it, and the console
