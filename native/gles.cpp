@@ -141,6 +141,9 @@ struct Program {
 };
 
 // the program a full screen pass runs: the frame's front target to the window, with the console's gamma ramp on top
+// the build this file is, on the screen: a screenshot then says which one the phone is running
+constexpr const char* kGlBuild = "gamma2";
+
 const char* kPresentVertex = R"(#version 300 es
 out vec2 v_uv;
 void main() {
@@ -240,6 +243,8 @@ class GlesBackend final : public Backend {
     GLuint ubo_[2] = {};
     GLuint present_ = 0, lut_ = 0;
     bool gamma_ = false;
+    int ramp_mean_[3] = {};
+    int ramp_high_ = 0;
     std::vector<uint8_t> ramp_;
     std::unordered_map<uint64_t, std::vector<glsl::Sampler>> sampler_units_;  // per shader module, until it is linked
     std::unordered_map<uint64_t, GLuint> fbos_;  // a colour and a depth target drawn into together
@@ -276,6 +281,7 @@ class GlesBackend final : public Backend {
     unsigned phase_lit_[7] = {};
     static constexpr const char* kPhaseName[7] = {"as drawn",   "no cull",    "front flipped", "no depth test",
                                                   "no blend",   "all channels", "all of it"};
+    double asm_ms_ = 0, draw_ms_ = 0, present_ms_ = 0;  // this frame's CPU time, and where it went
     unsigned frame_lit_ = 0;       // how much of the presented target is not black, in percent
     int frame_mean_[3] = {};       // and the average of its colour
     GLuint stats_fbo_ = 0, stats_tex_ = 0;  // a small copy of the target, for that average   // the target this frame presents was read back and had no pixel in it
@@ -993,8 +999,11 @@ void GlesBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, ui
 void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* indices) {
     if (!Ready()) return;
     draws_++;
+    auto draw_t0 = std::chrono::steady_clock::now();
     Assembled& a = asm_;
     if (!Assemble(s, prim, start, count, indices, a)) return;
+    auto draw_t1 = std::chrono::steady_clock::now();
+    asm_ms_ += std::chrono::duration<double, std::milli>(draw_t1 - draw_t0).count();
     Target* rt = EnsureTarget(s.rt, false);
     Target* ds = s.rs[kRsZEnable] || s.rs[kRsStencilEnable] ? EnsureTarget(s.zs, true) : nullptr;
     if (rt && ds && (rt->w != ds->w || rt->h != ds->h)) ds = nullptr;
@@ -1221,6 +1230,7 @@ void GlesBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t c
         glDrawArrays(mode, 0, GLsizei(drawn));
     }
     CheckGl("the draw call");
+    draw_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - draw_t1).count();
     (void)prim;
     (void)count;
 }
@@ -1374,6 +1384,7 @@ void GlesBackend::FrameStats(Target& t) {
 
 void GlesBackend::Present(const Surface& front) {
     if (!Ready()) return;
+    auto present_t0 = std::chrono::steady_clock::now();
     fps_n_++;
     auto now = std::chrono::steady_clock::now();
     double el = std::chrono::duration<double>(now - fps_t_).count();
@@ -1530,12 +1541,14 @@ void GlesBackend::Present(const Surface& front) {
             if (depth_read_)
                 ImGui::Text("depth %u/%u samples hold geometry, %u draws into target %08X", depth_lit_, depth_read_,
                             scene_draws_, drawn_ds_);
-            ImGui::Text("gamma %s, ramp %d %d %d", gamma_ ? "on" : "off", ramp_.empty() ? -1 : int(ramp_[0]),
-                        ramp_.empty() ? -1 : int(ramp_[128]), ramp_.empty() ? -1 : int(ramp_[255]));
+            ImGui::Text("gamma %s, ramp means %d %d %d, high %d", gamma_ ? "on" : "off", ramp_mean_[0], ramp_mean_[1],
+                        ramp_mean_[2], ramp_high_);
+            ImGui::Text("build %s, cpu draw %.1f ms (vertices %.1f), present %.1f ms", kGlBuild, draw_ms_, asm_ms_,
+                        present_ms_);
             ImGui::Text("self test: %s", selftest_ == 1 ? "drawing works" : selftest_ == 2 ? "drawing fails" : "not run");
             // the frame itself, drawn by the overlay: what the game put in the target is then in the screenshot
             // whether or not the present pass gets it to the screen
-            if (t) {
+            if (false) {
                 ImGui::Text("the frame the game draws:");
 #if defined(IMGUI_VERSION_NUM) && IMGUI_VERSION_NUM >= 19200
                 ImGui::Image(ImTextureRef(ImTextureID(t->img.tex)), ImVec2(256.0f, 192.0f));
@@ -1550,6 +1563,10 @@ void GlesBackend::Present(const Surface& front) {
     }
     SDL_GL_SwapWindow(host::Window());
     presents_++;
+    // the frame's own numbers for the next panel, and the counters start again: the draws of the frame after this one
+    // are the ones they will add up
+    present_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - present_t0).count();
+    draw_ms_ = asm_ms_ = 0;
 }
 
 bool GlesBackend::Readback(Target& t, std::vector<uint8_t>& px) {
@@ -1617,19 +1634,29 @@ void GlesBackend::SetGamma(const uint8_t* ramp) {
     // a ramp that maps a channel to black everywhere is a black screen with a full frame behind it, and the console
     // reads the ramp it wants; a title hands over one of zeros while it fades, and that is not a picture to show
     bool usable = true;
+    ramp_high_ = 0;
     for (int c = 0; c < 3; c++) {
+        long sum = 0;
         int high = 0;
-        for (int i = 0; i < 256; i++) high = std::max(high, int(ramp[c * 256 + i]));
-        if (high <= 8) usable = false;
+        for (int i = 0; i < 256; i++) {
+            sum += ramp[c * 256 + i];
+            high = std::max(high, int(ramp[c * 256 + i]));
+        }
+        ramp_mean_[c] = int(sum / 256);
+        ramp_high_ = std::max(ramp_high_, high);
+        if (sum / 256 < 8) usable = false;  // this channel comes out black
     }
     gamma_ = !identity && usable;
-    LOG_FIRST(2, "gl: gamma ramp %s (ends %u %u %u)", gamma_ ? "applied" : identity ? "identity" : "all black, ignored",
-              unsigned(ramp[0]), unsigned(ramp[255]), unsigned(ramp[512 + 255]));
+    LOG_FIRST(2, "gl: gamma ramp %s (mean %d %d %d, high %d)", gamma_ ? "applied" : identity ? "identity" : "black, ignored",
+              ramp_mean_[0], ramp_mean_[1], ramp_mean_[2], ramp_high_);
 }
 
 // a black screen with one error code in the log says nothing; the step it came from says everything
 void GlesBackend::CheckGl(const char* where) {
     if (error_seen_) return;
+    // glGetError makes a mobile driver wait for the frame in flight, and this renderer asks after every stage of every
+    // draw: the checks earn their place while it starts up, and then they are what the frame rate would go to
+    if (presents_ > 200) return;
     GLenum e = glGetError();
     if (e == GL_NO_ERROR) return;
     error_seen_ = true;
