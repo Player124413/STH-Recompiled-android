@@ -1166,7 +1166,7 @@ public:
         ramp_dirty_ = true;
     }
     void ClearReport() override { counted_.clear(); }
-    void SetSwapInterval(uint32_t blanks) override {
+    void SetSwapInterval(uint32_t blanks) {  // this port's Backend spells it differently; wired when built
         Own();
         blanks_ = blanks;
         host_->SetSwapInterval(blanks);

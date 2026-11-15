@@ -172,6 +172,10 @@ struct State {
     uint32_t vs_handle = 0;  // programmable when bit 0 set, otherwise an FVF
     std::shared_ptr<VertexShader> vs;
     std::shared_ptr<PixelShader> ps;
+    // the antialiasing scale the other SDK carries on every state: this port draws no multisampled targets, so they
+    // are the identity and a renderer that reads them (gl43) keeps its own maths
+    float aa_x = 1.0f;
+    float aa_y = 1.0f;
     std::array<std::array<float, 4>, 192> vsc{};  // hardware order: D3D register + 96
     std::array<std::array<float, 4>, 16> psc{};
     Viewport viewport;
