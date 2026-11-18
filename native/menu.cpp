@@ -299,19 +299,19 @@ void GraphicsPage() {
         Save();
         LOGI("port: widescreen %s", g_widescreen ? "on, the picture fills the screen" : "off, the console's 4:3 with bars");
     }
-    static const char* kNames[3] = {"VULKAN", "OPENGL ES 3", "OPENGL (SPIDER-MAN 2)"};  // the note below names it too
+    static const char* kNames[2] = {"VULKAN", "OPENGL ES 3.2"};  // the note below names it too
     {
         char label[64];
-        std::snprintf(label, sizeof(label), "RENDERER: %s", kNames[port::g_renderer > 2 ? 0 : port::g_renderer]);
+        std::snprintf(label, sizeof(label), "RENDERER: %s", kNames[port::g_renderer > 1 ? 0 : port::g_renderer]);
         if (ButtonRow(label, IM_COL32(120, 170, 220, 255))) {
-            port::g_renderer = (port::g_renderer + 1) % 3;
+            port::g_renderer = (port::g_renderer + 1) % 2;
             Save();
             LOGI("port: renderer %s, and it is the next start that uses it", kNames[port::g_renderer]);
         }    }
     if (!port::g_renderer_note.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.45f, 1.0f));
         ImGui::TextWrapped("asked for: %s. last time a GL renderer was tried: %s",
-                           kNames[port::g_renderer > 2 ? 0 : port::g_renderer], port::g_renderer_note.c_str());
+                           kNames[port::g_renderer > 1 ? 0 : port::g_renderer], port::g_renderer_note.c_str());
         ImGui::PopStyleColor();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.68f, 0.68f, 1.0f));

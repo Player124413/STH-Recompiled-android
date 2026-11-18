@@ -21,6 +21,8 @@
 #include "app/app.h"
 #include "core/input.h"
 #include "core/log.h"
+struct ANativeWindow;  // android/native_window.h, forward: this file passes the pointer on and nothing more
+#include "gpu/android_platform.h"  // the GL ES backend's window
 #include "host.h"
 #include "image_symbols.h"
 #include "kernel/kernel.h"
@@ -248,24 +250,21 @@ int main(int, char**) {
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title.c_str());
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, true);
-    // the window carries the renderer the menu was set to: Vulkan by default, OpenGL ES 3 when it was asked for
-    if (port::g_renderer != 0) {
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        // 3.1: the Spider-Man 2 renderer's shaders are #version 310 es. The older ES renderer asks nothing of the minor
-        // version, and a driver that offers only 3.0 still gets a context -- SDL falls back, the shaders then say so
-        // 3.2 for the Spider-Man 2 renderer (it names glDrawElementsBaseVertex and glCopyImageSubData, ES 3.2), 3.1 for
-        // the port's own
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, port::g_renderer == 2 ? 2 : 1);
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
-    } else {
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
-    }
+    // The window is a plain native window either way: Vulkan makes its own surface from it, and so does the GL ES
+    // backend (sdk/runtime/gpu/gles.cpp), which owns its EGL context -- SDL is never asked for an OpenGL one.
+    if (port::g_renderer == 0) SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, 1280);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, 720);
     g_window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
+    if (g_window && port::g_renderer != 0) {
+        // the GL ES backend presents to this window itself, so it is handed the native one before the title draws
+        auto* native = static_cast<ANativeWindow*>(
+            SDL_GetPointerProperty(SDL_GetWindowProperties(g_window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+        if (native) gpu::SetAndroidWindow(native);
+        LOGI("graphics: native window %s for the GL ES renderer", native ? "handed over" : "missing");
+    }
     if (!g_window) {
         LOGE("app: no window: %s", SDL_GetError());
         return 1;
