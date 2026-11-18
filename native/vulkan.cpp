@@ -3862,26 +3862,11 @@ VulkanBackend* g_vulkan = nullptr;
 }  // namespace
 
 namespace {
-// the SDK's GL ES 3.2 backend: vulkan.cpp's own state translation and shaders, drawn through EGL and GLSL ES
-std::unique_ptr<Backend> CreateGlesBackend();
-Backend* g_gles = nullptr;
+Backend* g_gles = nullptr;  // the GL ES backend, when the platform chose it: the report goes to it
 }  // namespace
 
-std::unique_ptr<Backend> CreateBackend() {
-    // The renderer the menu was set to. Both GL paths fall back to Vulkan when the driver will not have them, and they
-    // say why in the log rather than drawing a black screen. The choice itself is never rewritten here: a fallback that
-    // saved itself would turn the next run into a Vulkan one that asked for nothing at all, with nothing in the log to
-    // say why.
-    LOGI("port: the renderer asked for is %u (0 Vulkan, 1 GL ES 3, 2 the GL one)", port::g_renderer);
-    if (port::g_renderer == 1) {
-        if (auto es = CreateGlesBackend()) {
-            LOGI("graphics: OpenGL ES 3.2 renderer");
-            g_gles = es.get();
-            return es;
-        }
-        LOGE("graphics: no GL ES 3 context here, Vulkan draws instead");
-        if (port::g_renderer_note.empty()) port::g_renderer_note = "no GL ES 3 context";
-    }
+std::unique_ptr<Backend> CreateVulkanBackend() {
+    LOGI("graphics: Vulkan backend made (the choice of renderer is the platform's, android_display.cpp)");
     auto backend = std::make_unique<VulkanBackend>();
     g_vulkan = backend.get();
     return backend;

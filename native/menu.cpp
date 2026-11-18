@@ -17,6 +17,7 @@
 #include "common/render_ext.h"
 #include "core/input.h"
 #include "core/log.h"
+#include "gpu/android_platform.h"  // SetRendererChoice, which the SDK acts on at the next start
 #include "host.h"
 #include "kernel/kernel.h"
 
@@ -305,6 +306,7 @@ void GraphicsPage() {
         std::snprintf(label, sizeof(label), "RENDERER: %s", kNames[port::g_renderer > 1 ? 0 : port::g_renderer]);
         if (ButtonRow(label, IM_COL32(120, 170, 220, 255))) {
             port::g_renderer = (port::g_renderer + 1) % 2;
+            gpu::SetRendererChoice(port::g_renderer ? gpu::kRendererGles : gpu::kRendererVulkan);
             Save();
             LOGI("port: renderer %s, and it is the next start that uses it", kNames[port::g_renderer]);
         }    }

@@ -258,6 +258,8 @@ int main(int, char**) {
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, 720);
     g_window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
+    // what the menu asked for, handed to the platform before anything is created
+    gpu::SetRendererChoice(port::g_renderer ? gpu::kRendererGles : gpu::kRendererVulkan);
     if (g_window && port::g_renderer != 0) {
         // the GL ES backend presents to this window itself, so it is handed the native one before the title draws
         auto* native = static_cast<ANativeWindow*>(

@@ -55,7 +55,9 @@ private:
     uint32_t fence_ = 0;
 };
 
-std::unique_ptr<Backend> CreateBackend();
+std::unique_ptr<Backend> CreateBackend();  // the platform's Chooser: Vulkan, or GL ES when Vulkan will not start
+std::unique_ptr<Backend> CreateVulkanBackend();  // this port's Vulkan backend (native/vulkan.cpp)
+std::unique_ptr<Backend> CreateGlesBackend();    // the SDK's GL ES 3.2 backend (sdk/runtime/gpu/gles.cpp)
 // the same backend driven from a thread of its own: calls return once recorded
 std::unique_ptr<Backend> CreateThreadedBackend(std::unique_ptr<Backend> inner);
 
