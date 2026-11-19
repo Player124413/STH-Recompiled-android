@@ -41,6 +41,12 @@ int GetDisplayMode();
 float DisplayAspect(uint32_t width, uint32_t height);
 
 // frames per second at most, 0 for no limit beyond the display's own pace; takes effect on the next frame
+// the port's own UI (touch controls and menu) drawn into the GL ES frame: the backend calls this on its thread with its
+// context current, just before the frame goes to the window, handing it the surface's size in pixels
+using UiDrawFn = void (*)(uint32_t width, uint32_t height);
+void SetUiDraw(UiDrawFn draw);
+UiDrawFn GetUiDraw();
+
 void SetFrameLimit(uint32_t fps);
 
 // the frames per second presented, measured over the last half second

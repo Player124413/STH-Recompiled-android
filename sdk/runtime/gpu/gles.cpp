@@ -1384,6 +1384,9 @@ void GlesBackend::Present(const Surface& front) {
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
     }
     GL_CHECK("present");
+    // the port's touch controls and menu, with this backend's context current and its own framebuffer bound: without
+    // this the UI is simply absent on GL ES, which is what a missing touch overlay looks like
+    if (UiDrawFn ui = gpu::GetUiDraw()) ui(uint32_t(surf_w_), uint32_t(surf_h_));
     EndFrame();
     bool lost = false;
     {

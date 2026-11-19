@@ -283,6 +283,8 @@ int main(int, char**) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    // the GL ES backend asks for this before every frame: the menu and touch controls are the port's, not the SDK's
+    gpu::SetUiDraw(&gpu::UiGlDraw);
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_IsTouchScreen;

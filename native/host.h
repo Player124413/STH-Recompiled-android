@@ -172,3 +172,8 @@ extern bool g_widescreen;
 namespace port {
 void ResetDefaults();  // the settings as a first run has them
 }
+
+namespace gpu {
+// the port's UI drawn into the GL ES backend's frame (native/ui_gl.cpp), handed to it through SetUiDraw
+void UiGlDraw(uint32_t width, uint32_t height);
+}  // namespace gpu
