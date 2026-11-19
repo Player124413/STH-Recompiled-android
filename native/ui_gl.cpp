@@ -24,7 +24,7 @@ namespace {
 
 ImGuiContext* g_ctx = nullptr;  // the port's context: ImGui's current one is per thread, and the backend draws on its own
 bool g_started = false;
-GLuint g_program = 0, g_vao = 0, g_vbo = 0, g_ibo = 0, g_font = 0;
+GLuint g_program = 0, g_vao = 0, g_vbo = 0, g_ibo = 0, g_font = 0, g_white = 0, g_quad = 0;
 
 const char* kVertex = R"(#version 300 es
 precision highp float;
@@ -100,6 +100,14 @@ bool Start() {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     ImGui::GetIO().Fonts->SetTexID(static_cast<ImTextureID>(g_font));  // an id, not a pointer: 1.91 keeps it in an integer
+    // a 1x1 white texel, and a square to prove the whole path on a phone: if the square is on screen and the menu is
+    // not, the shader and the swap are fine and the fault is in ImGui's vertex data; if neither is, the hook never ran
+    const unsigned char white[4] = {255, 255, 255, 255};
+    glGenTextures(1, &g_white);
+    glBindTexture(GL_TEXTURE_2D, g_white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
     glGenBuffers(1, &g_ibo);
@@ -169,6 +177,24 @@ void UiGlDraw(uint32_t width, uint32_t height) {
                            reinterpret_cast<const void*>(size_t(cmd.IdxOffset) * sizeof(ImDrawIdx)));
         }
     }
+    // the square: 120x120 at the top left, solid red, drawn after ImGui so it cannot be hidden by it
+    struct V { float x, y, u, v; unsigned int c; };
+    const V quad[6] = {{0, 0, 0, 0, 0xFF0000FFu},     {120, 0, 1, 0, 0xFF0000FFu}, {0, 120, 0, 1, 0xFF0000FFu},
+                       {120, 0, 1, 0, 0xFF0000FFu},   {120, 120, 1, 1, 0xFF0000FFu}, {0, 120, 0, 1, 0xFF0000FFu}};
+    if (!g_quad) glGenBuffers(1, &g_quad);
+    glBindBuffer(GL_ARRAY_BUFFER, g_quad);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_white);
+    glScissor(0, GLint(height) - 120, 120, 120);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<const void*>(0));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<const void*>(8));
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(V), reinterpret_cast<const void*>(16));
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
     glDisable(GL_SCISSOR_TEST);
     glBindVertexArray(0);
     glUseProgram(0);
