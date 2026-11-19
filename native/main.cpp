@@ -286,6 +286,7 @@ int main(int, char**) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     // the GL ES backend asks for this before every frame: the menu and touch controls are the port's, not the SDK's
+    gpu::UiGlBindContext();  // the context this thread made, so the backend's thread can make it current
     gpu::SetUiDraw(&gpu::UiGlDraw);
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;

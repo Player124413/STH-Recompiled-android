@@ -177,4 +177,6 @@ void ResetDefaults();  // the settings as a first run has them
 namespace gpu {
 // the port's UI drawn into the GL ES backend's frame (native/ui_gl.cpp), handed to it through SetUiDraw
 void UiGlDraw(uint32_t width, uint32_t height);
+// remembers this thread's ImGui context, so the backend's thread can make the same one current before drawing the UI
+void UiGlBindContext();
 }  // namespace gpu
