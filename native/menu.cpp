@@ -332,7 +332,14 @@ void GraphicsPage() {
         // the culling experiment: the same console winding drawn the other way, so a picture missing whole surfaces
         // says which side this driver calls the front
         port::g_flip_front = !port::g_flip_front;
+        gpu::SetFlipFront(port::g_flip_front);
         LOGI("port: front faces are read %s", port::g_flip_front ? "the other way round" : "as the console made them");
+    }
+    if (ToggleRow("NO DEPTH TEST", port::g_no_depth)) {
+        // the second experiment: with the depth test off, a scene that appears says the depth convention is what hides it
+        port::g_no_depth = !port::g_no_depth;
+        gpu::SetNoDepth(port::g_no_depth);
+        LOGI("port: depth test %s", port::g_no_depth ? "off" : "as the console asks");
     }
     if (ButtonRow("GRAPHICS REPORT", IM_COL32(200, 170, 90, 255))) host::GraphicsReport();
     if (ButtonRow("SEND A FRAME TO THE DEV", IM_COL32(200, 170, 90, 255))) {

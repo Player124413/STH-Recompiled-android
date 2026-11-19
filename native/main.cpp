@@ -260,6 +260,8 @@ int main(int, char**) {
     SDL_DestroyProperties(props);
     // what the menu asked for, handed to the platform before anything is created
     gpu::SetRendererChoice(port::g_renderer ? gpu::kRendererGles : gpu::kRendererVulkan);
+    gpu::SetFlipFront(port::g_flip_front);
+    gpu::SetNoDepth(port::g_no_depth);
     if (g_window && port::g_renderer != 0) {
         // the GL ES backend presents to this window itself, so it is handed the native one before the title draws
         auto* native = static_cast<ANativeWindow*>(

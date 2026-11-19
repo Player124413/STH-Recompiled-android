@@ -31,7 +31,8 @@ bool g_vulkan_auto = false;  // read by the Vulkan backend: it refuses blocklist
 namespace {
 
 ANativeWindow* g_window = nullptr;
-UiDrawFn g_ui_draw = nullptr;  // the port's touch controls and menu, drawn into the GL ES frame
+UiDrawFn g_ui_draw = nullptr;
+std::atomic<bool> g_flip_front{false}, g_no_depth{false};  // the port's touch controls and menu, drawn into the GL ES frame
 ANativeWindow* (*g_window_provider)() = nullptr;
 std::atomic<int> g_display_mode{kDisplayFill};
 constexpr float kMaxFillAspect = 2.4f;  // 21:9 phones are 2.33
@@ -171,6 +172,10 @@ int GetDisplayMode() { return g_display_mode; }
 void SetResolutionPercent(uint32_t percent) { g_resolution_percent = std::clamp(percent, 10u, 200u); }
 uint32_t GetResolutionPercent() { return g_resolution_percent; }
 UiDrawFn GetUiDraw() { return g_ui_draw; }
+void SetFlipFront(bool on) { g_flip_front.store(on); }
+bool GetFlipFront() { return g_flip_front.load(); }
+void SetNoDepth(bool on) { g_no_depth.store(on); }
+bool GetNoDepth() { return g_no_depth.load(); }
 void SetUiDraw(UiDrawFn draw) { g_ui_draw = draw; }
 
 void SetFrameLimit(uint32_t fps) { g_frame_limit = fps ? std::clamp(fps, 10u, 1000u) : 0u; }

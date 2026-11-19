@@ -495,7 +495,15 @@ bool GlesBackend::Init(uint32_t width, uint32_t height) {
     }
     auto clip = reinterpret_cast<ClipControlFn>(eglGetProcAddress("glClipControlEXT"));
     clip_control_ = HasExtension("GL_EXT_clip_control") && clip;
-    if (clip_control_) clip(kLowerLeft, kZeroToOne);
+    if (clip_control_) {
+        clip(kLowerLeft, kZeroToOne);
+    } else {
+        // without clip control the shaders write GL's -1..1, and a reversed depth range turns that back into the 1..0
+        // the console's comparison expects: near is 1, far is 0. Without this call the range stays 0..1, every compare
+        // is upside down, and the 3D scene fails the depth test while the HUD -- which draws with no depth at all --
+        // still appears
+        glDepthRangef(1.0f, 0.0f);
+    }
     s3tc_ = HasExtension("GL_EXT_texture_compression_s3tc") ||
             (HasExtension("GL_EXT_texture_compression_dxt1") && HasExtension("GL_ANGLE_texture_compression_dxt3") &&
              HasExtension("GL_ANGLE_texture_compression_dxt5"));
@@ -1021,7 +1029,7 @@ void GlesBackend::ApplyState(const State& s, const Assembled& a, bool has_rt, bo
         sten = s.rs[kRsStencilEnable] != 0;
         if (OffsetsPolygons(s, a.topology)) zslope = -Bits(SimpleState(s, kMSlopeScale));  // toward the camera is up
     }
-    if (zen) {
+    if (zen && !gpu::GetNoDepth()) {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(ReversedCmp(SimpleState(s, kMZFunc)));
         glDepthMask(SimpleState(s, kMZWriteEnable) ? GL_TRUE : GL_FALSE);
@@ -1053,7 +1061,7 @@ void GlesBackend::ApplyState(const State& s, const Assembled& a, bool has_rt, bo
     } else {
         glDisable(GL_CULL_FACE);
     }
-    glFrontFace(cull == kCullCw ? GL_CW : GL_CCW);
+    glFrontFace((cull == kCullCw) != gpu::GetFlipFront() ? GL_CW : GL_CCW);
     if (s.rs[kRsFillMode] == kFillWireframe) LOG_FIRST(1, "gles: wireframe is drawn solid (ES has no polygon mode)");
 }
 

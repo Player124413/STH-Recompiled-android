@@ -22,6 +22,7 @@ uint32_t g_renderer = 0;
 // the culling experiment: the two renderers disagree on which winding is a front face, and one frame each way on the
 // phone settles it faster than another build
 bool g_flip_front = false;
+bool g_no_depth = false;  // the diagnostic: no depth test at all, see the menu
 // why a GL renderer did not start, as the menu shows it: the answer without a log file
 std::string g_renderer_note;      // 0 Vulkan, 1 OpenGL ES 3.0 -- Vulkan only for now, see CreateBackend()
 bool g_safe_graphics = true;  // every workaround at once, for a phone whose picture comes out wrong

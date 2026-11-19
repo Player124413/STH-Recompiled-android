@@ -47,6 +47,13 @@ using UiDrawFn = void (*)(uint32_t width, uint32_t height);
 void SetUiDraw(UiDrawFn draw);
 UiDrawFn GetUiDraw();
 
+// diagnostics for a picture that comes out wrong: the front face read the other way, and no depth test at all. Both are
+// read at every draw, so they can be flipped while the game runs
+void SetFlipFront(bool on);
+bool GetFlipFront();
+void SetNoDepth(bool on);
+bool GetNoDepth();
+
 void SetFrameLimit(uint32_t fps);
 
 // the frames per second presented, measured over the last half second
